@@ -128,22 +128,35 @@ des: $(DES_LIB)
 	cd $(DES); $(PYTHON) setup.py bdist_wheel
 	@ls $(DES)/dist/*.whl
 
+# tf_fault_tolerance
+TFT := tf_fault_tolerance
+include $(TFT)/Makefile
+
+.PHONY: tft
+tft: $(TFT_LIB)
+	@echo -e "\033[1;33m[BUILD] $$t \033[0m" \
+        "build wheel package"
+	cd $(TFT); $(PYTHON) setup.py bdist_wheel
+	@ls $(TFT)/dist/*.whl
+
+.PHONY: all
+all: gazer des tft
+
+ALL_MOUDLES := $(GAZER) $(DES) $(TFT)
+
 .PHONY: clean
 clean:
-	@rm -fr $(GAZER)/dist/
-	@rm -fr $(GAZER)/build/
-	@rm -fr $(GAZER)/*.egg-info/
-	@rm -fr $(DES)/dist/
-	@rm -fr $(DES)/build/
-	@rm -fr $(DES)/*.egg-info/
+	@rm -fr $(addsuffix /dist/, $(ALL_MOUDLES))
+	@rm -fr $(addsuffix /build/, $(ALL_MOUDLES))
+	@rm -fr $(addsuffix /*.egg-info/, $(ALL_MOUDLES))
 	@rm -fr third_party/rapidjson/build
 	@rm -fr third_party/grpc/build
 	@rm -fr third_party/protobuf/build
 	@echo "remove .o/.d/.so/.pb*"
-	@find $(GAZER) $(DES) -name *.o -exec rm -fr {} \;
-	@find $(GAZER) $(DES) -name *.d -exec rm -fr {} \;
-	@find $(GAZER) $(DES) -name *.so -exec rm -fr {} \;
-	@find $(GAZER) $(DES) -name *.pb.* -exec rm -rf {} \;
-	@find $(GAZER) $(DES) -name *_pb2* -exec rm -fr {} \;
+	@find $(ALL_MOUDLES) -name *.o -exec rm -fr {} \;
+	@find $(ALL_MOUDLES) -name *.d -exec rm -fr {} \;
+	@find $(ALL_MOUDLES) -name *.so -exec rm -fr {} \;
+	@find $(ALL_MOUDLES) -name *.pb.* -exec rm -rf {} \;
+	@find $(ALL_MOUDLES) -name *_pb2* -exec rm -fr {} \;
 
 .DEFAULT_GOAL := gazer
