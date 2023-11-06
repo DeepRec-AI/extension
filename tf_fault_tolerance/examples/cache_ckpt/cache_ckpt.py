@@ -66,11 +66,7 @@ def train(job_name, task_index, cluster, is_chief, target):
 
     scaffold = tf.train.Scaffold()
     hooks=[]
-    checkpoint_saver_hook = tf.train.CheckpointSaverHook(
-        checkpoint_dir="./model_ckpt/",
-        save_steps = 100,
-        scaffold = scaffold)
-    chief_only_hooks = [checkpoint_saver_hook]
+    chief_only_hooks = []
     sess_config = tf.ConfigProto()
     sess_config.device_filters.append("/job:ps")
 
@@ -78,6 +74,8 @@ def train(job_name, task_index, cluster, is_chief, target):
     with tf.train.MonitoredTrainingSession(
             master=target,
             is_chief=is_chief,
+            checkpoint_dir="./model_ckpt/",
+            save_checkpoint_steps = 100,
             chief_only_hooks=chief_only_hooks,
             hooks=hooks,
             scaffold=scaffold,
@@ -87,7 +85,7 @@ def train(job_name, task_index, cluster, is_chief, target):
                 local_step +=  1
                 _, c, g = mon_sess.run([optimizer, loss, global_step])
                 if local_step % 10 == 0:
-                    print("[%s] step %d, global_step %d, loss is %f"% (datetime.datetime.now().strftime('%b-%d-%y %H:%M:%S'), local_step, g, c))
+                    print("[%s] step %d, global_step %d, loss is %f" % (datetime.datetime.now().strftime('%b-%d-%y %H:%M:%S'), local_step, g, c))
             except tf.errors.OutOfRangeError:
                 print("no more input data to read.")
                 break

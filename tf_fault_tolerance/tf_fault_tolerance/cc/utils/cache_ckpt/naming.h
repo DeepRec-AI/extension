@@ -20,23 +20,61 @@ limitations under the License.
 
 namespace tensorflow {
 
+/**
+ * @brief Get CKPTFilenamePrefix without global_step.
+ *
+ * @param [in] ckpt_file_path_prefix: ckpt path prefix with global_step,
+ *               format: '/path/to/ckpt/dir/model.ckpt-<global_step>'
+ *
+ * @return ckpt path prefix without global_step,
+ *           format: '/path/to/ckpt/dir/model.ckpt'
+ */
+std::string CKPTPathPrefixWithoutGlobalStep(
+              const std::string& ckpt_file_path_prefix);
+
+/**
+ * @brief Get cache ckpt file path prefix.
+ *
+ * @param [in] cache_path: path to save cache ckpt file.
+ * @param [in] ckpt_filename_prefix: filename prefix without global_step,
+ *               for example: 'model.ckpt'
+ * @param [in] global_step: global_step of this ckpt.
+ *
+ * @return cache ckpt path prefix with global step,
+ *           format: '/cache/path/model.ckpt-<global_step>'
+ */
+std::string CacheCKPTFilePathPrefix(StringPiece cache_path,
+              StringPiece ckpt_filename_prefix, const int64 global_step);
+
+// This function is a copy of tensorflow::MetaFilename.
+std::string CKPTMetaFilename(StringPiece ckpt_path_prefix);
+
+/**
+ * @brief Get cache ckpt meta file path.
+ *
+ * @param [in] ckpt_path_prefix: filename prefix, for example:
+                 '/cache/path/model.ckpt-<global_step>'
+ * @param [in] shard: shard id of this ckpt.
+ * @param [in] num_shards: num_shards of this ckpt.
+ *
+ * @return cache ckpt meta file
+ *           format: '/cache/path/model.ckpt-<global_step>.index-<shard>-of-<num_shard>'
+ */
+std::string CacheCKPTMetaFilename(StringPiece ckpt_path_prefix,
+                                  const int32 shard, const int32 num_shards);
+
 // This function is a copy of tensorflow::DataFilename.
-std::string CKPTDataFilename(StringPiece cache_path_prefix, int32 shard_id,
+std::string CKPTDataFilename(StringPiece ckpt_path_prefix, int32 shard,
                              int32 num_shards);
 
-std::string CacheCKPTDataFilename(StringPiece ckpt_path_prefix,
-                                  StringPiece cache_ckpt_path, int32 shard_id,
-                                  int32 num_shards);
+std::string GenerateCKPTKey(StringPiece ckpt_path_prefix, int32 shard,
+                            int32 num_shards);
 
-std::string GenerateCacheCKPTKey(StringPiece ckpt_path_prefix, int32 shard_id,
-                                 int32 num_shards);
+void ParseCKPTKey(const std::string& ckpt_key, std::string& shard_key,
+                  int64& global_step);
 
-std::string CacheCKPTDataFilenamePattern(StringPiece ckpt_path_prefix,
-                                         StringPiece cache_ckpt_path,
-                                         int32 shard_id, int32 num_shards);
-
-std::string CacheCKPTMetaFilenamePattern(StringPiece ckpt_path_prefix,
-                                         StringPiece cache_ckpt_path);
+void ParseShardKey(const std::string& shard_key, int32& shard,
+                   int32& num_shards);
 
 } // End of namespace tensorflow
 

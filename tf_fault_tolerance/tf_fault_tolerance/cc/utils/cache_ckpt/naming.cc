@@ -16,6 +16,7 @@ limitations under the License.
 #include <vector>
 #include <string>
 
+#include "tensorflow/core/lib/strings/numbers.h"
 #include "tensorflow/core/lib/strings/stringprintf.h"
 #include "tensorflow/core/platform/default/logging.h"
 
@@ -23,86 +24,72 @@ limitations under the License.
 
 namespace tensorflow {
 
-std::string CKPTDataFilename(StringPiece cache_path_prefix, int32 shard_id,
-                             int32 num_shards) {
-  CHECK_GT(num_shards, 0);
-  CHECK_LT(shard_id, num_shards);
-  return strings::Printf("%.*s.data-%05d-of-%05d",
+std::string CKPTPathPrefixWithoutGlobalStep(
+              const std::string& ckpt_path_prefix) {
+  // rm global_step
+  auto split_index = ckpt_path_prefix.rfind("-");
+  std::string filename_prefix = ckpt_path_prefix.substr(0, split_index);
+  return filename_prefix;
+}
+
+std::string CacheCKPTFilePathPrefix(StringPiece cache_path,
+            StringPiece ckpt_filename_prefix, const int64 global_step) {
+  std::string cache_path_prefix = \
+    absl::StrCat(cache_path, "/", ckpt_filename_prefix); // without global step.
+
+  return strings::Printf("%.*s-%lld",
                          static_cast<int>(cache_path_prefix.size()),
-                         cache_path_prefix.data(),
-                         shard_id, num_shards);
+                         cache_path_prefix.data(), global_step);
 }
 
-std::string CacheCKPTDataFilename(StringPiece ckpt_path_prefix,
-                                  StringPiece cache_ckpt_path, int32 shard_id,
-                                  int32 num_shards) {
-  CHECK_GT(num_shards, 0);
-  CHECK_LT(shard_id, num_shards);
+std::string CKPTMetaFilename(StringPiece ckpt_path_prefix) {
+  return strings::Printf("%.*s.index",
+                         static_cast<int>(ckpt_path_prefix.size()),
+                         ckpt_path_prefix.data());
+}
 
-  std::vector<std::string> ckpt_path_prefix_vec = \
-    absl::StrSplit(ckpt_path_prefix, "/");
+std::string CacheCKPTMetaFilename(StringPiece ckpt_path_prefix,
+                                  const int32 shard, const int32 num_shards) {
+  return strings::Printf("%.*s.index-%05d-of-%05d",
+                         static_cast<int>(ckpt_path_prefix.size()),
+                         ckpt_path_prefix.data(), shard, num_shards);
+}
 
-  std::string ckpt_data_file_prefix = ckpt_path_prefix_vec.back();
-  std::string cache_ckpt_data_file_prefix = \
-    absl::StrCat(cache_ckpt_path, "/", ckpt_data_file_prefix);
-
+std::string CKPTDataFilename(StringPiece ckpt_path_prefix, int32 shard,
+                             int32 num_shards) {
   return strings::Printf("%.*s.data-%05d-of-%05d",
-                         static_cast<int>(cache_ckpt_data_file_prefix.size()),
-                         cache_ckpt_data_file_prefix.data(),
-                         shard_id, num_shards);
+                         static_cast<int>(ckpt_path_prefix.size()),
+                         ckpt_path_prefix.data(), shard, num_shards);
 }
 
-std::string GenerateCacheCKPTKey(StringPiece ckpt_path_prefix, int32 shard_id,
-                                 int32 num_shards) {
+std::string GenerateCKPTKey(StringPiece ckpt_path_prefix, int32 shard,
+                            int32 num_shards) {
   std::vector<std::string> ckpt_path_prefix_vec = \
     absl::StrSplit(ckpt_path_prefix, "-");
   std::string global_step = ckpt_path_prefix_vec.back();
 
   return strings::Printf("%.*s:%05d-%05d", static_cast<int>(global_step.size()),
-                         global_step.data(), shard_id, num_shards);
+                         global_step.data(), shard, num_shards);
 }
 
-std::string CacheCKPTDataFilenamePattern(StringPiece ckpt_path_prefix,
-                                         StringPiece cache_ckpt_path,
-                                         int32 shard_id, int32 num_shards) {
-  CHECK_GT(num_shards, 0);
-  CHECK_LT(shard_id, num_shards);
+void ParseCKPTKey(const std::string& ckpt_key, std::string& shard_key,
+                  int64& global_step) {
+  // ckpt_key format: global_step:shard-num_shards
+  std::vector<std::string> ckpt_key_vec = absl::StrSplit(ckpt_key, ":");
+  CHECK_EQ(ckpt_key_vec.size(), 2);
 
-  std::vector<std::string> ckpt_path_prefix_vec = \
-    absl::StrSplit(ckpt_path_prefix, "/");
-
-  std::string ckpt_data_file_prefix = ckpt_path_prefix_vec.back();
-  // rm global step.
-  std::vector<std::string> ckpt_data_file_prefix_vec = \
-    absl::StrSplit(ckpt_data_file_prefix, "-");
-  ckpt_data_file_prefix = ckpt_data_file_prefix_vec.front();
-
-  std::string cache_ckpt_data_file_prefix = \
-    absl::StrCat(cache_ckpt_path, "/", ckpt_data_file_prefix);
-
-  return strings::Printf("%.*s-[0-9]*.data-%05d-of-%05d",
-                         static_cast<int>(cache_ckpt_data_file_prefix.size()),
-                         cache_ckpt_data_file_prefix.data(),
-                         shard_id, num_shards);
+  shard_key = ckpt_key_vec.back();
+  CHECK(strings::safe_strto64(ckpt_key_vec.front(), &global_step));
 }
 
-std::string CacheCKPTMetaFilenamePattern(StringPiece ckpt_path_prefix,
-                                         StringPiece cache_ckpt_path) {
-  std::vector<std::string> ckpt_path_prefix_vec = \
-    absl::StrSplit(ckpt_path_prefix, "/");
+void ParseShardKey(const std::string& shard_key, int32& shard,
+                   int32& num_shards) {
+  // shard_key format: shard-num_shards
+  std::vector<std::string> shard_key_vec = absl::StrSplit(shard_key, "-");
+  CHECK_EQ(shard_key_vec.size(), 2);
 
-  std::string ckpt_meta_file_prefix = ckpt_path_prefix_vec.back();
-  // rm global step.
-  std::vector<std::string> ckpt_meta_file_prefix_vec = \
-    absl::StrSplit(ckpt_meta_file_prefix, "-");
-  ckpt_meta_file_prefix = ckpt_meta_file_prefix_vec.front();
-
-  std::string cache_ckpt_meta_file_prefix = \
-    absl::StrCat(cache_ckpt_path, "/", ckpt_meta_file_prefix);
-
-  return strings::Printf("%.*s-[0-9]*.index",
-                         static_cast<int>(cache_ckpt_meta_file_prefix.size()),
-                         cache_ckpt_meta_file_prefix.data());
+  CHECK(strings::safe_strto32(shard_key_vec.front(), &shard));
+  CHECK(strings::safe_strto32(shard_key_vec.back(), &num_shards));
 }
 
 } // End of namespace tensorflow

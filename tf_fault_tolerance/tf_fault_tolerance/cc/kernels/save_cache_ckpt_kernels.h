@@ -16,47 +16,46 @@ limitations under the License.
 #ifndef TF_FAULT_TOLERANCE_CC_KERNELS_SAVE_CACHE_CKPT_KERNELS_H_
 #define TF_FAULT_TOLERANCE_CC_KERNELS_SAVE_CACHE_CKPT_KERNELS_H_
 
-#include "tensorflow/core/framework/op_kernel.h"
+#include "tf_fault_tolerance/cc/kernels/cache_ckpt_kernels.h"
 
 namespace tensorflow {
 
-class GenerateCacheCKPTOp : public OpKernel {
+class GenerateCacheCKPTOp : public CacheCKPTOp {
  public:
   explicit GenerateCacheCKPTOp(OpKernelConstruction* context);
-
   ~GenerateCacheCKPTOp();
 
   void Compute(OpKernelContext* context) override;
 
  private:
+  // Functions.
   // validate the inputs.
-  void ValidateInputs(OpKernelContext* context, const Tensor& ckpt_prefix,
-                      const Tensor& cache_ckpt_path, const Tensor& shard,
+  void ValidateInputs(OpKernelContext* context, const Tensor& ckpt_path_prefix,
+                      const Tensor& cache_path, const Tensor& shard,
                       const Tensor& num_shards);
 
-  // create local cache checkpoint file.
-  Status CreateLocalCacheCKPT(const std::string& ckpt_path_prefix,
-                              const std::string& cache_ckpt_path,
-                              int32 shard_id, int32 num_shards,
-                              std::string& cache_ckpt_data_file);
-
-  // generate cache_ckpt_key output, RecvRemoteCacheCKPTOp will use it to create
-  // a mapping to cache ckpt.
-  Status FillCacheCKPTKeyTensor(const std::string& ckpt_path_prefix,
-                                int32 shard_id, int32 num_shards, Tensor* t);
-
-  // generate cache_ckpt, which will be sent to other ps.
-  Status FillCacheCKPTTensor(const std::string& cache_ckpt_data_file,
-                             Tensor* t);
+  // Variables.
+  bool is_merged_meta_;
+  std::string ckpt_storage_type_;
 };
 
-class RecvRemoteCacheCKPTOp : public OpKernel {
+class BackupRemoteCacheCKPTOp : public CacheCKPTOp {
  public:
-  explicit RecvRemoteCacheCKPTOp(OpKernelConstruction* context);
-
-  ~RecvRemoteCacheCKPTOp();
+  explicit BackupRemoteCacheCKPTOp(OpKernelConstruction* context);
+  ~BackupRemoteCacheCKPTOp();
 
   void Compute(OpKernelContext* context) override;
+
+ private:
+  // Functions.
+  // validate the inputs.
+  void ValidateInputs(OpKernelContext* context, const Tensor& cache_path,
+                      const Tensor& ckpt_key, const Tensor& ckpt_meta,
+                      const Tensor& ckpt_data);
+
+  // Variables.
+  bool is_merged_meta_;
+  std::string ckpt_storage_type_;
 };
 
 } // End of namespace tensorflow

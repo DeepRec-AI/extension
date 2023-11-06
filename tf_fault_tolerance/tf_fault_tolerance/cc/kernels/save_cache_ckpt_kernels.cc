@@ -20,9 +20,10 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/env.h"
 
-#include "tf_fault_tolerance/cc/common/cache_ckpt/remote_cache_ckpt_manager.h"
+#include "tf_fault_tolerance/cc/common/cache_ckpt/cache_ckpt_manager.h"
 #include "tf_fault_tolerance/cc/kernels/save_cache_ckpt_kernels.h"
 #include "tf_fault_tolerance/cc/utils/cache_ckpt/naming.h"
+#include "tf_fault_tolerance/cc/utils/platform/file.h"
 
 namespace tensorflow {
 
@@ -30,119 +31,84 @@ namespace tensorflow {
 // functions of GenerCacheCKPTOp.
 
 GenerateCacheCKPTOp::GenerateCacheCKPTOp(OpKernelConstruction* context)
-  : OpKernel(context) {}
+  : CacheCKPTOp(context) {
+  OP_REQUIRES_OK(context, context->GetAttr("is_merged_meta", &is_merged_meta_));
+  OP_REQUIRES_OK(context,
+                 context->GetAttr("ckpt_storage_type", &ckpt_storage_type_));
+}
 
 GenerateCacheCKPTOp::~GenerateCacheCKPTOp() {}
 
 void GenerateCacheCKPTOp::Compute(OpKernelContext* context) {
-  const Tensor& ckpt_prefix_tensor = context->input(0);
-  const Tensor& cache_ckpt_path_tensor = context->input(1);
+  // ckpt_path_prefix_tensor contains global_step
+  const Tensor& ckpt_path_prefix_tensor = context->input(0);
+  const Tensor& cache_path_tensor = context->input(1);
   const Tensor& shard_tensor = context->input(2);
   const Tensor& num_shards_tensor = context->input(3);
 
-  ValidateInputs(context, ckpt_prefix_tensor, cache_ckpt_path_tensor,
+  ValidateInputs(context, ckpt_path_prefix_tensor, cache_path_tensor,
                  shard_tensor, num_shards_tensor);
   if (!context->status().ok()) {
     return;
   }
 
-  const std::string& ckpt_prefix = ckpt_prefix_tensor.scalar<tstring>()();
-  const std::string& cache_ckpt_path = \
-    cache_ckpt_path_tensor.scalar<tstring>()();
+  const std::string& ckpt_path_prefix = \
+    ckpt_path_prefix_tensor.scalar<tstring>()();
+  const std::string& cache_path = cache_path_tensor.scalar<tstring>()();
   const int shard = shard_tensor.scalar<int>()();
   const int num_shards = num_shards_tensor.scalar<int>()();
+  const std::string ckpt_meta_file_path = CKPTMetaFilename(ckpt_path_prefix);
+  const std::string ckpt_data_file_path = \
+    CKPTDataFilename(ckpt_path_prefix, shard, num_shards);
+  std::string ckpt_filename_prefix, unused;
+  ParsePOSIXFilePath(ckpt_path_prefix, unused, ckpt_filename_prefix);
 
-  string cache_ckpt_data_file;
-  OP_REQUIRES_OK(context,
-                 CreateLocalCacheCKPT(ckpt_prefix, cache_ckpt_path, shard,
-                                      num_shards, cache_ckpt_data_file));
-
-  Tensor* cache_ckpt_key_tensor;
+  // Generate ckpt key.
+  Tensor* ckpt_key_tensor;
   OP_REQUIRES_OK(context, context->allocate_output(0, TensorShape({}),
-                                                   &cache_ckpt_key_tensor));
-  FillCacheCKPTKeyTensor(ckpt_prefix, shard, num_shards, cache_ckpt_key_tensor);
+                                                   &ckpt_key_tensor));
+  const std::string ckpt_key =\
+    GenerateCKPTKey(ckpt_path_prefix, shard, num_shards);
+  ckpt_key_tensor->scalar<tstring>()() = ckpt_key;
 
-  Tensor* cache_ckpt_tensor;
+  // Load ckpt to tensor.
+  Env* env = Env::Default();
+  Tensor* ckpt_meta_tensor;
   OP_REQUIRES_OK(context, context->allocate_output(1, TensorShape({}),
-                                                   &cache_ckpt_tensor));
-  FillCacheCKPTTensor(cache_ckpt_data_file, cache_ckpt_tensor);
-}
+                                                   &ckpt_meta_tensor));
+  OP_REQUIRES_OK(context, ReadFileToString(env, ckpt_meta_file_path,
+                                  ckpt_meta_tensor->scalar<tstring>().data()));
+  Tensor* ckpt_data_tensor;
+  OP_REQUIRES_OK(context, context->allocate_output(2, TensorShape({}),
+                                                   &ckpt_data_tensor));
+  OP_REQUIRES_OK(context, ReadFileToString(env, ckpt_data_file_path,
+                            ckpt_data_tensor->scalar<tstring>().data()));
 
-Status GenerateCacheCKPTOp::FillCacheCKPTTensor(
-                              const std::string& cache_ckpt_data_file,
-                              Tensor* t) {
-  Env* env = Env::Default();
-  Status status = \
-    ReadFileToString(env, cache_ckpt_data_file, t->scalar<tstring>().data());
+  // Generate local cache ckpt.
+  struct CacheCKPTManagerParams params;
+  params.is_local_ckpt = true;
+  params.is_merged_meta = is_merged_meta_;
+  params.storage_type = ckpt_storage_type_;
+  params.cache_path = cache_path;
+  params.ckpt_filename_prefix = \
+    CKPTPathPrefixWithoutGlobalStep(ckpt_filename_prefix);
 
-  return status;
-}
-
-Status GenerateCacheCKPTOp::FillCacheCKPTKeyTensor(
-                              const std::string& ckpt_path_prefix,
-                              int32 shard_id, int32 num_shards, Tensor* t) {
-  std::string cache_ckpt_key = \
-    GenerateCacheCKPTKey(ckpt_path_prefix, shard_id, num_shards);
-  t->scalar<tstring>()() = cache_ckpt_key;
-
-  return Status::OK();
-}
-
-Status GenerateCacheCKPTOp::CreateLocalCacheCKPT(
-                              const std::string& ckpt_path_prefix,
-                              const std::string& cache_ckpt_path,
-                              int32 shard_id, int32 num_shards,
-                              std::string& cache_ckpt_data_file) {
-  std::string ckpt_data_file = \
-    CKPTDataFilename(ckpt_path_prefix, shard_id, num_shards);
-  cache_ckpt_data_file = \
-    CacheCKPTDataFilename(ckpt_path_prefix, cache_ckpt_path, shard_id,
-                          num_shards);
-
-  Env* env = Env::Default();
-  // Try to create cache_ckpt_path directory.
-  Status s = env->CreateDir(cache_ckpt_path);
-  if (s != Status::OK() && s.code() != error::ALREADY_EXISTS) {
-    return s;
-  }
-
-  // Delete old cache ckpt.
-  // 1. delete data file.
-  std::string cache_ckpt_data_files_pattern = \
-    CacheCKPTDataFilenamePattern(ckpt_path_prefix, cache_ckpt_path, shard_id,
-                                 num_shards);
-  std::vector<std::string> cache_ckpt_filenames;
-  TF_CHECK_OK(env->GetMatchingPaths(cache_ckpt_data_files_pattern,
-                                    &cache_ckpt_filenames));
-  for (auto filename : cache_ckpt_filenames) {
-    env->DeleteFile(filename);
-  }
-
-  // 2. delete meta file.
-  std::string cache_ckpt_meta_files_pattern = \
-    CacheCKPTMetaFilenamePattern(ckpt_path_prefix, cache_ckpt_path);
-  cache_ckpt_filenames.clear();
-  TF_CHECK_OK(env->GetMatchingPaths(cache_ckpt_meta_files_pattern,
-                                    &cache_ckpt_filenames));
-  for (auto filename : cache_ckpt_filenames) {
-    env->DeleteFile(filename);
-  }
-
-  s = env->CopyFile(ckpt_data_file, cache_ckpt_data_file);
-  return s;
+  CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
+  cache_ckpt_mgr->UpdateCacheCKPT(ckpt_key, *ckpt_meta_tensor,
+                                  *ckpt_data_tensor, params);
 }
 
 void GenerateCacheCKPTOp::ValidateInputs(OpKernelContext* context,
-                                         const Tensor& ckpt_prefix,
-                                         const Tensor& cache_ckpt_path,
+                                         const Tensor& ckpt_path_prefix,
+                                         const Tensor& cache_path,
                                          const Tensor& shard,
                                          const Tensor& num_shards) {
-  OP_REQUIRES(context, TensorShapeUtils::IsScalar(ckpt_prefix.shape()),
-              errors::InvalidArgument("ckpt_prefix is not a scalar: ",
-                                      ckpt_prefix.shape().DebugString()));
-  OP_REQUIRES(context, TensorShapeUtils::IsScalar(cache_ckpt_path.shape()),
-              errors::InvalidArgument("cache_ckpt_path is not a scalar: ",
-                                      cache_ckpt_path.shape().DebugString()));
+  OP_REQUIRES(context, TensorShapeUtils::IsScalar(ckpt_path_prefix.shape()),
+              errors::InvalidArgument("ckpt_path_prefix is not a scalar: ",
+                                      ckpt_path_prefix.shape().DebugString()));
+  OP_REQUIRES(context, TensorShapeUtils::IsScalar(cache_path.shape()),
+              errors::InvalidArgument("cache_path is not a scalar: ",
+                                      cache_path.shape().DebugString()));
   OP_REQUIRES(context, TensorShapeUtils::IsScalar(shard.shape()),
               errors::InvalidArgument("shard is not a scalar: ",
                                       shard.shape().DebugString()));
@@ -155,46 +121,63 @@ REGISTER_KERNEL_BUILDER(Name("GenerateCacheCKPT").Device(DEVICE_CPU),
                         GenerateCacheCKPTOp);
 
 //------------------------------------------------------------------------------
-// functions of RecvRemoteCacheCKPTOp.
+// functions of BackupRemoteCacheCKPTOp.
 
-RecvRemoteCacheCKPTOp::RecvRemoteCacheCKPTOp(OpKernelConstruction* context)
-  : OpKernel(context) {}
-
-RecvRemoteCacheCKPTOp::~RecvRemoteCacheCKPTOp() {}
-
-void RecvRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
-  auto rm = context->resource_manager();
-  auto ndef = def();
-
-  ContainerInfo cinfo;
-  OP_REQUIRES_OK(context, cinfo.Init(rm, ndef, true /* use name */));
-
-  RemoteCacheCKPTManager* ckpt_mgr = nullptr;
-  OP_REQUIRES_OK(context, rm->LookupOrCreate<RemoteCacheCKPTManager>(
-                              cinfo.container(), cinfo.name(), &ckpt_mgr,
-                              [](RemoteCacheCKPTManager** p) -> Status {
-                                *p = new RemoteCacheCKPTManager();
-                                return Status::OK();
-                              }));
-  core::ScopedUnref scope(ckpt_mgr);
-
-  const Tensor& cache_ckpt_key_tensor = context->input(0);
-  const Tensor& cache_ckpt_tensor = context->input(1);
-
-  OP_REQUIRES(context,
-              TensorShapeUtils::IsScalar(cache_ckpt_key_tensor.shape()),
-              errors::InvalidArgument("cache_ckpt_key is not a scalar: ",
-                                      cache_ckpt_key_tensor.shape()
-                                                           .DebugString()));
-  OP_REQUIRES(context, TensorShapeUtils::IsScalar(cache_ckpt_tensor.shape()),
-              errors::InvalidArgument("cache_ckpt is not a scalar: ",
-                                      cache_ckpt_tensor.shape().DebugString()));
-
-  const std::string& cache_ckpt_key = \
-    cache_ckpt_key_tensor.scalar<tstring>()();
-  ckpt_mgr->UpdateCacheCKPT(cache_ckpt_key, cache_ckpt_tensor);
+BackupRemoteCacheCKPTOp::BackupRemoteCacheCKPTOp(OpKernelConstruction* context)
+  : CacheCKPTOp(context) {
+  OP_REQUIRES_OK(context, context->GetAttr("is_merged_meta", &is_merged_meta_));
+  OP_REQUIRES_OK(context,
+                 context->GetAttr("ckpt_storage_type", &ckpt_storage_type_));
 }
 
-REGISTER_KERNEL_BUILDER(Name("RecvRemoteCacheCKPT").Device(DEVICE_CPU),
-                        RecvRemoteCacheCKPTOp);
+BackupRemoteCacheCKPTOp::~BackupRemoteCacheCKPTOp() {}
+
+void BackupRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
+  const Tensor& cache_path_tensor = context->input(0);
+  const Tensor& ckpt_key_tensor = context->input(1);
+  const Tensor& ckpt_meta_tensor = context->input(2);
+  const Tensor& ckpt_data_tensor = context->input(3);
+
+  ValidateInputs(context, cache_path_tensor, ckpt_key_tensor, ckpt_meta_tensor,
+                 ckpt_data_tensor);
+  if (!context->status().ok()) {
+    return;
+  }
+
+  const std::string& cache_path = cache_path_tensor.scalar<tstring>()();
+  const std::string ckpt_key = ckpt_key_tensor.scalar<tstring>()();
+
+  struct CacheCKPTManagerParams params;
+  params.is_local_ckpt = false;
+  params.is_merged_meta = is_merged_meta_;
+  params.storage_type = ckpt_storage_type_;
+  params.cache_path = cache_path;
+  params.ckpt_filename_prefix = "model.cache_ckpt";
+
+  CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
+  cache_ckpt_mgr->UpdateCacheCKPT(ckpt_key, ckpt_meta_tensor,
+                                  ckpt_data_tensor, params);
+}
+
+void BackupRemoteCacheCKPTOp::ValidateInputs(OpKernelContext* context,
+                                             const Tensor& cache_path,
+                                             const Tensor& ckpt_key,
+                                             const Tensor& ckpt_meta,
+                                             const Tensor& ckpt_data) {
+  OP_REQUIRES(context, TensorShapeUtils::IsScalar(cache_path.shape()),
+              errors::InvalidArgument("cache_path is not a scalar: ",
+                                      cache_path.shape().DebugString()));
+  OP_REQUIRES(context, TensorShapeUtils::IsScalar(ckpt_key.shape()),
+              errors::InvalidArgument("ckpt_key is not a scalar: ",
+                                      ckpt_key.shape().DebugString()));
+  OP_REQUIRES(context, TensorShapeUtils::IsScalar(ckpt_meta.shape()),
+              errors::InvalidArgument("ckpt_meta is not a scalar: ",
+                                      ckpt_meta.shape().DebugString()));
+  OP_REQUIRES(context, TensorShapeUtils::IsScalar(ckpt_data.shape()),
+              errors::InvalidArgument("ckpt_data is not a scalar: ",
+                                      ckpt_data.shape().DebugString()));
+}
+
+REGISTER_KERNEL_BUILDER(Name("BackupRemoteCacheCKPT").Device(DEVICE_CPU),
+                        BackupRemoteCacheCKPTOp);
 } // End of namespace tensorflow
