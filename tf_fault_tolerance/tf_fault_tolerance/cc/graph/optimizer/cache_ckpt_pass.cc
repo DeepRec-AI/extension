@@ -16,8 +16,10 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/optimization_registry.h"
 #include "tensorflow/core/framework/node_def_builder.h"
 #include "tensorflow/core/graph/graph_constructor.h"
+#include "tensorflow/core/graph/node_builder.h"
 #include "tensorflow/core/util/env_var.h"
 
+#include "tf_fault_tolerance/cc/ops/cache_ckpt_ops.h"
 #include "tf_fault_tolerance/cc/utils/cache_ckpt/storage_type.h"
 
 namespace tensorflow {
@@ -854,6 +856,8 @@ class AddRestoreCacheCKPTSubGraphHelper {
 };
 } // Endof namespace cache_ckpt_pass
 
+//------------------------------------------------------------------------------
+// Add cache ckpt save and restore subgraph.
 class CacheCKPTPass : public GraphOptimizationPass {
  public:
   Status Run(const GraphOptimizationPassOptions& options) override {
@@ -1009,5 +1013,156 @@ class CacheCKPTPass : public GraphOptimizationPass {
 
 REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PLACEMENT, 0,
                       CacheCKPTPass);
+
+//------------------------------------------------------------------------------
+// Replace the specific 'Send'/'Recv' op with 'SliceSend'/'SliceRecv op.
+class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
+ public:
+  Status Run(const GraphOptimizationPassOptions& options) override {
+    if (!IsEnableReplaceTransferOp()) {
+      return Status::OK();
+    }
+
+    if (options.partition_graphs == nullptr) {
+      return errors::Internal("partition graphs should be available.");
+    }
+
+    TF_RETURN_IF_ERROR(GetSliceSizeFromEnvVar());
+    TF_RETURN_IF_ERROR(GetSliceTransferTimeOutMillisecond());
+
+    for (auto& pg : *(options.partition_graphs)) {
+      Graph* graph = (pg.second).get();
+      std::unique_ptr<Graph> new_graph(new Graph(OpRegistry::Global()));
+      CopyGraph(*graph, new_graph.get());
+      TF_RETURN_IF_ERROR(ModifyGraph(new_graph));
+      (pg.second).swap(new_graph);
+    }
+
+    VLOG(0) << "Replace transfer op with slice transfer op success.";
+
+    return Status::OK();
+  }
+
+ private:
+  // Functions.
+  bool IsEnableReplaceTransferOp() {
+    bool need_replace_send = false;
+    TF_CHECK_OK(ReadBoolFromEnvVar("ENABLE_CACHE_CKPT_REPLACE_TRANSFER_OP",
+                                   true, &need_replace_send));
+    return need_replace_send;
+  }
+
+  Status GetSliceSizeFromEnvVar() {
+    int64 slice_size = 0;
+    // default value is 512MB.
+    TF_RETURN_IF_ERROR(ReadInt64FromEnvVar("SLICE_TRANS_SIZE", 0x20000000,
+                                           &slice_size));
+    slice_size_ = slice_size;
+    return Status::OK();
+  }
+
+  Status GetSliceTransferTimeOutMillisecond() {
+    // default value is 5min.
+    return ReadInt64FromEnvVar("SLICE_TRANS_TIMEOUT_MS", 300000,
+                               &timeout_ms_);
+  }
+
+  Status ModifyGraph(std::unique_ptr<Graph>& graph) {
+    for (Node* n : graph->op_nodes()) {
+      if (n->IsSend() && n->type_string() != "_RefSend") {
+        TF_RETURN_IF_ERROR(TryToReplaceSendOp(graph, n));
+      } else if (n->IsRecv() && n->type_string() != "_RefRecv") {
+        TF_RETURN_IF_ERROR(TryToReplaceRecvOp(graph, n));
+      }
+    }
+    return Status::OK();
+  }
+
+  Status TryToReplaceSendOp(std::unique_ptr<Graph>& g, Node* n) {
+    // Get input edge.
+    CHECK_EQ(n->num_inputs(), 1);
+    const Edge* e = nullptr;
+    TF_RETURN_IF_ERROR(n->input_edge(0, &e));
+    Node* src_node = e->src();
+    int out_idx = e->src_output();
+
+    // only replace ckpt data edge now.
+    const std::string& src_op = src_node->type_string();
+    auto attrs = n->attrs();
+    if ((src_op == "GenerateCacheCKPT" && \
+         out_idx == CacheCKPTOp::GenerateCacheCKPTOp::DataTensorOutputIdx) || \
+        (src_op == "RepatriateRemoteCacheCKPT" && out_idx == \
+         CacheCKPTOp::RepatriateRemoteCacheCKPTOp::DataTensorOutputIdx)) {
+      Node* new_send_node = nullptr;
+      TF_RETURN_IF_ERROR(NodeBuilder(n->name(), "_SliceSend")
+                         .Device(n->assigned_device_name())
+                         .Input(src_node, out_idx)
+                         .Attr("tensor_name", *(attrs.Find("tensor_name")))
+                         .Attr("send_device", *(attrs.Find("send_device")))
+                         .Attr("send_device_incarnation",
+                               *(attrs.Find("send_device_incarnation")))
+                         .Attr("recv_device", *(attrs.Find("recv_device")))
+                         .Attr("client_terminated",
+                               *(attrs.Find("client_terminated")))
+                         .Attr("slice_size", slice_size_)
+                         .Finalize(g.get(), &new_send_node));
+      TF_RETURN_IF_ERROR(g->UpdateEdge(src_node, out_idx, new_send_node, 0));
+      g->RemoveNode(n);
+    }
+
+    return Status::OK();
+  }
+
+  Status TryToReplaceRecvOp(std::unique_ptr<Graph>& g, Node* n) {
+    // only replace ckpt data edge now.
+    bool find_target_recv_node = false;
+    for (auto e : n->out_edges()) {
+      const std::string& dst_op = e->dst()->type_string();
+      int in_idx = e->dst_input();
+      if ((dst_op == "BackupRemoteCacheCKPT" && in_idx == \
+           CacheCKPTOp::BackupRemoteCacheCKPTOp::DataTensorInputIdx) || \
+          (dst_op == "GetRemoteCacheCKPT" && in_idx == \
+           CacheCKPTOp::GetRemoteCacheCKPTOp::DataTensorInputIdx)) {
+        find_target_recv_node = true;
+        break;
+      }
+    }
+    if (!find_target_recv_node) {
+      return Status::OK();
+    }
+
+    auto attrs = n->attrs();
+    Node* new_recv_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(n->name(), "_SliceRecv")
+                       .Device(n->assigned_device_name())
+                       .Attr("tensor_type", *(attrs.Find("tensor_type")))
+                       .Attr("tensor_name", *(attrs.Find("tensor_name")))
+                       .Attr("send_device", *(attrs.Find("send_device")))
+                       .Attr("send_device_incarnation",
+                             *(attrs.Find("send_device_incarnation")))
+                       .Attr("recv_device", *(attrs.Find("recv_device")))
+                       .Attr("client_terminated",
+                             *(attrs.Find("client_terminated")))
+                       .Attr("slice_size", slice_size_)
+                       .Attr("timeout_ms", timeout_ms_)
+                       .Finalize(g.get(), &new_recv_node));
+
+    for (auto e : n->out_edges()) {
+      Node* dst_node = e->dst();
+      int in_idx = e->dst_input();
+      TF_RETURN_IF_ERROR(g->UpdateEdge(new_recv_node, 0, dst_node, in_idx));
+    }
+
+    g->RemoveNode(n);
+    return Status::OK();
+  }
+
+  // Variable.
+  int64 slice_size_;
+  int64 timeout_ms_;
+};
+
+REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PARTITIONING, 0,
+                      ReplaceTransferOpWithSliceTransferOpPass);
 
 } // End of namespace tensorflow

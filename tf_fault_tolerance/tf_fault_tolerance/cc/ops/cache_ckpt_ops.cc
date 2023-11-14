@@ -16,6 +16,8 @@ limitations under the License.
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/shape_inference.h"
 
+#include "tf_fault_tolerance/cc/ops/cache_ckpt_ops.h"
+
 namespace tensorflow {
 
 using shape_inference::ShapeHandle;
@@ -48,6 +50,12 @@ REGISTER_OP("GenerateCacheCKPT")
       return Status::OK();
     });
 
+namespace CacheCKPTOp {
+namespace GenerateCacheCKPTOp {
+int DataTensorOutputIdx = 2;
+} // End of namespace GenerateCacheCKPTOp
+} // End of namespace CacheCKPTOp
+
 REGISTER_OP("BackupRemoteCacheCKPT")
     .Input("cache_path: string")
     .Input("ckpt_key: string")
@@ -66,6 +74,12 @@ REGISTER_OP("BackupRemoteCacheCKPT")
 
       return Status::OK();
     });
+
+namespace CacheCKPTOp {
+namespace BackupRemoteCacheCKPTOp {
+int DataTensorInputIdx = 3;
+} // End of namespace BackupRemoteCacheCKPTOp
+} // End of namespace CacheCKPTOp
 
 REGISTER_OP("CheckLocalCacheCKPT")
     .Input("ckpt_path_prefix: string")
@@ -121,6 +135,12 @@ REGISTER_OP("GetRemoteCacheCKPT")
       return Status::OK();
     });
 
+namespace CacheCKPTOp {
+namespace GetRemoteCacheCKPTOp {
+int DataTensorInputIdx = 5;
+} // End of namespace GetRemoteCacheCKPTOp
+} // End of namespace CacheCKPTOp
+
 REGISTER_OP("RepatriateRemoteCacheCKPT")
     .Input("ckpt_path_prefix: string")
     .Input("shard: int32")
@@ -145,6 +165,12 @@ REGISTER_OP("RepatriateRemoteCacheCKPT")
 
       return Status::OK();
     });
+
+namespace CacheCKPTOp {
+namespace RepatriateRemoteCacheCKPTOp {
+int DataTensorOutputIdx = 3;
+} // End of namespace RepatriateRemoteCacheCKPTOp
+} // End of namespace CacheCKPTOp
 
 REGISTER_OP("LoadCKPTFromFilePath")
     .Input("ckpt_path_prefix: string")
