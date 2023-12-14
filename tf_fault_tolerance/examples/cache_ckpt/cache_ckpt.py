@@ -4,7 +4,7 @@ import os
 import paiio
 import sys
 import tensorflow as tf
-import tf_fault_tolerance
+import tf_fault_tolerance as ft
 
 files = ['./data/sample.csv']
 
@@ -66,7 +66,7 @@ def train(job_name, task_index, cluster, is_chief, target):
 
     scaffold = tf.train.Scaffold()
     hooks=[]
-    chief_only_hooks = []
+    chief_only_hooks = [ft.train.AsyncCacheCKPTRunnerHook()]
     sess_config = tf.ConfigProto()
     sess_config.device_filters.append("/job:ps")
 

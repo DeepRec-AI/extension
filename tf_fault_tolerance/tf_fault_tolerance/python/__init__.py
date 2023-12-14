@@ -17,13 +17,4 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensorflow.python.framework import load_library
-from tensorflow.python.platform import resource_loader
-
-tf_falut_tolerance_so = load_library.load_library(
-    resource_loader.get_path_to_datafile('libtf_fault_tolerance.so'))
-
-from tf_fault_tolerance import python
-
-# export python api
-from tf_fault_tolerance.api import train
+from tf_fault_tolerance.python import training

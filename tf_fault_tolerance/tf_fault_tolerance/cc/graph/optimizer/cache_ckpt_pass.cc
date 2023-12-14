@@ -63,7 +63,11 @@ class AddSaveCacheCKPTSubGraphHelper {
     : relative_nodes_(relative_nodes), cache_path_(cache_path),
       cache_ckpt_replica_(cache_ckpt_replica), num_shards_(num_shards),
       local_storage_type_(local_storage_type),
-      remote_storage_type_(remote_storage_type) {}
+      remote_storage_type_(remote_storage_type), fetch_op_target_(nullptr),
+      cancel_op_target_(nullptr), resume_op_target_(nullptr) {
+    ckpt_path_prefix_node_ = relative_nodes.ckpt_path_prefix_node;
+    TF_CHECK_OK(GetAsyncCKPTPathPutTimeOutMillisecond());
+  }
 
   ~AddSaveCacheCKPTSubGraphHelper() {}
 
@@ -74,6 +78,19 @@ class AddSaveCacheCKPTSubGraphHelper {
     TF_RETURN_IF_ERROR(
       GetShardToShardedFilenameNodeMap(sharded_filename_nodes,
                                        shard_to_sharded_filename_node));
+
+    const std::string async_name_prefix = "save/AsyncSaveCacheCKPT";
+    enable_async_saving_ = \
+      TryToFindAsyncSavingRelativeNodes(g, async_name_prefix);
+    Node* ckpt_path_put_node = nullptr;
+    if (enable_async_saving_) {
+      // Create async saving node.
+      TF_RETURN_IF_ERROR(CreateAsyncSavingNodes(g, async_name_prefix,
+                                                ckpt_path_put_node));
+    } else {
+      LOG(WARNING) << "CacheCKPTPass: enable async saving cache ckpt failed, "
+                   << "use sync saving instead.";
+    }
 
     // Generate save cache ckpt subgraph for each ShardedFilename/Save op.
     // map of 'shard' to 'GenerateCacheCKPT' node.
@@ -98,12 +115,25 @@ class AddSaveCacheCKPTSubGraphHelper {
     }
     CHECK_NE(save_run_node, nullptr);
 
-    for (size_t i = 0; i < shard_to_generate_node.size(); i++) {
-      Node* generate_node = shard_to_generate_node[i];
-      g->AddControlEdge(merge_checkpoints_node, generate_node);
-      for (Node* n : shard_to_backup_node[i]) {
-        g->AddControlEdge(generate_node, n);
-        g->AddControlEdge(n, save_run_node);
+    if (enable_async_saving_) {
+      g->AddControlEdge(merge_checkpoints_node, ckpt_path_put_node);
+      g->AddControlEdge(ckpt_path_put_node, save_run_node);
+
+      for (size_t i = 0; i < shard_to_generate_node.size(); i++) {
+        Node* generate_node = shard_to_generate_node[i];
+        for (Node* n : shard_to_backup_node[i]) {
+          g->AddControlEdge(generate_node, n);
+          g->AddControlEdge(n, fetch_op_target_);
+        }
+      }
+    } else {
+      for (size_t i = 0; i < shard_to_generate_node.size(); i++) {
+        Node* generate_node = shard_to_generate_node[i];
+        g->AddControlEdge(merge_checkpoints_node, generate_node);
+        for (Node* n : shard_to_backup_node[i]) {
+          g->AddControlEdge(generate_node, n);
+          g->AddControlEdge(n, save_run_node);
+        }
       }
     }
 
@@ -111,7 +141,7 @@ class AddSaveCacheCKPTSubGraphHelper {
   }
 
  private:
-  // Functions
+  // Functions.
   Status GetShardToShardedFilenameNodeMap(
            const std::unordered_set<Node*>& sharded_filename_nodes,
            std::vector<Node*>& shard_to_sharded_filename_node) {
@@ -127,6 +157,82 @@ class AddSaveCacheCKPTSubGraphHelper {
       CHECK_LT(shard, num_shards_);
       shard_to_sharded_filename_node[shard] = n;
     }
+
+    return Status::OK();
+  }
+
+  bool TryToFindAsyncSavingRelativeNodes(std::unique_ptr<Graph>& g,
+                                         const std::string& name_prefix) {
+    bool find_fetch = false;
+    bool find_cancel = false;
+    bool find_resume = false;
+
+    for (Node* n : g->op_nodes()) {
+      if (n->type_string() != "NoOp") {
+        continue;
+      }
+
+      if (n->name() == name_prefix+"/async_fetch_op") {
+        fetch_op_target_ = n;
+        find_fetch = true;
+      } else if (n->name() == name_prefix+"/async_cancel_op") {
+        cancel_op_target_ = n;
+        find_cancel = true;
+      } else if (n->name() == name_prefix+"/async_resume_op") {
+        resume_op_target_ = n;
+        find_resume = true;
+      }
+    }
+
+    return find_fetch && find_cancel && find_resume;
+  }
+
+  Status CreateAsyncSavingNodes(std::unique_ptr<Graph>& g,
+                                const std::string& name_prefix,
+                                Node*& ckpt_path_put_node) {
+    std::string device_name = ckpt_path_prefix_node_->assigned_device_name();
+    // Create ckpt path put node.
+    std::string put_node_name = name_prefix + "/ItemBufferPut";
+    TF_RETURN_IF_ERROR(NodeBuilder(put_node_name, "ItemBufferPut")
+                       .Device(device_name)
+                       .Input(ckpt_path_prefix_node_, 0)
+                       .Attr("shared_name", "async_cache_ckpt")
+                       .Attr("is_overwritable", true)
+                       .Attr("timeout_millis", timeout_millis_)
+                       .Finalize(g.get(), &ckpt_path_put_node));
+
+    // Create ckpt path take node.
+    std::string take_node_name = name_prefix + "/ItemBufferTake";
+    Node* ckpt_path_take_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(take_node_name, "ItemBufferTake")
+                       .Device(device_name)
+                       .Attr("dtype", ckpt_path_prefix_node_->output_type(0))
+                       .Attr("shared_name", "async_cache_ckpt")
+                       .Attr("is_overwritable", true)
+                       .Finalize(g.get(), &ckpt_path_take_node));
+    ckpt_path_prefix_node_ = ckpt_path_take_node;
+
+    // Create resume node.
+    std::string resume_node_name = name_prefix + "/ItemBufferResume";
+    Node* ckpt_path_resume_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(resume_node_name, "ItemBufferSetState")
+                       .Device(device_name)
+                       .Attr("is_cancelled", false)
+                       .Attr("shared_name", "async_cache_ckpt")
+                       .Attr("is_overwritable", true)
+                       .Finalize(g.get(), &ckpt_path_resume_node));
+    g->AddControlEdge(ckpt_path_resume_node, resume_op_target_);
+
+    // Create cancel node.
+    std::string cancel_node_name = name_prefix + "/ItemBufferCancel";
+    Node* ckpt_path_cancel_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(cancel_node_name, "ItemBufferSetState")
+                       .Device(device_name)
+                       .Attr("is_cancelled", true)
+                       .Attr("shared_name", "async_cache_ckpt")
+                       .Attr("is_overwritable", true)
+                       .Finalize(g.get(), &ckpt_path_cancel_node));
+    g->AddControlEdge(ckpt_path_cancel_node, cancel_op_target_);
 
     return Status::OK();
   }
@@ -174,12 +280,11 @@ class AddSaveCacheCKPTSubGraphHelper {
         cache_path_node, shard_node, num_shards_node));
 
     // Create 'GenerateCacheCKPT' node.
-    Node* ckpt_prefix_node = relative_nodes_.ckpt_path_prefix_node;
     NodeDef generate_def;
     TF_RETURN_IF_ERROR(NodeDefBuilder(node_name, "GenerateCacheCKPT")
                        .Device(device_name)
-                       .Input(ckpt_prefix_node->name(), 0,
-                              ckpt_prefix_node->output_type(0))
+                       .Input(ckpt_path_prefix_node_->name(), 0,
+                              ckpt_path_prefix_node_->output_type(0))
                        .Input(cache_path_node->name(), 0,
                               cache_path_node->output_type(0))
                        .Input(shard_node->name(), 0, shard_node->output_type(0))
@@ -193,7 +298,7 @@ class AddSaveCacheCKPTSubGraphHelper {
     shard_to_generate_node[shard] = generate_node;
 
     // Add input edges for 'GenerateCacheCKPT' node.
-    g->AddEdge(ckpt_prefix_node, 0, generate_node, 0);
+    g->AddEdge(ckpt_path_prefix_node_, 0, generate_node, 0);
     g->AddEdge(cache_path_node, 0, generate_node, 1);
     g->AddEdge(shard_node, 0, generate_node, 2);
     g->AddEdge(num_shards_node, 0, generate_node, 3);
@@ -306,6 +411,12 @@ class AddSaveCacheCKPTSubGraphHelper {
     return Status::OK();
   }
 
+  Status GetAsyncCKPTPathPutTimeOutMillisecond() {
+    // default value is 5min.
+    return ReadInt64FromEnvVar("ASYNC_CKPT_PATH_PUT_TIMEOUT_MS", 300000,
+                               &timeout_millis_);
+  }
+
   // Variables.
   struct RelativeNodes relative_nodes_;
   std::string cache_path_;
@@ -313,6 +424,12 @@ class AddSaveCacheCKPTSubGraphHelper {
   int num_shards_;
   std::string local_storage_type_;
   std::string remote_storage_type_;
+  Node* ckpt_path_prefix_node_;
+  Node* fetch_op_target_;
+  Node* cancel_op_target_;
+  Node* resume_op_target_;
+  int64 timeout_millis_;
+  bool enable_async_saving_;
 };
 
 //------------------------------------------------------------------------------
