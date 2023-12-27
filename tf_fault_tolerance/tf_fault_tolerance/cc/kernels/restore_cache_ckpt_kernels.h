@@ -32,6 +32,9 @@ class CheckLocalCacheCKPTOp : public CacheCKPTOp {
   void ValidateInputs(OpKernelContext* context, const Tensor& ckpt_prefix,
                       const Tensor& shard, const Tensor& num_shards);
 
+  Status TryToGetCacheCKPT(OpKernelContext* ctx, const std::string& ckpt_key,
+                           ResourceHandle& handle, bool& is_exist_cache);
+
   // Variable.
   std::string container_;
   std::string name_;
@@ -51,9 +54,13 @@ class GetRemoteCacheCKPTOp : public CacheCKPTOp {
                       const Tensor& ckpt_data);
 
   Status GenerateLocalCacheCKPT(OpKernelContext* context,
-           struct CacheCKPTManagerParams& params, ResourceHandle& handle,
-           const std::string& ckpt_key, const Tensor& ckpt_meta_tensor,
-           const Tensor& ckpt_data_tensor, bool& exist_cache_ckpt);
+                                ResourceHandle& handle,
+                                const std::string& ckpt_key,
+                                const std::string& cache_path,
+                                const std::string& ckpt_filename_prefix,
+                                const std::string& meta_file,
+                                const std::string& data_file,
+                                bool& exist_cache_ckpt);
 
   // Variable.
   std::string container_;
@@ -70,8 +77,15 @@ class RepatriateRemoteCacheCKPTOp : public CacheCKPTOp {
   void Compute(OpKernelContext* context) override;
 
  private:
+  // Functions.
   void ValidateInputs(OpKernelContext* context, const Tensor& ckpt_path_prefix,
                       const Tensor& shard, const Tensor& num_shards);
+
+  bool FillCacheCKPTOutput(const std::string& ckpt_key, Tensor& ckpt_meta,
+                           Tensor& ckpt_data);
+
+  // Variables.
+  bool output_is_path_;
 };
 
 class LoadCKPTFromFilePathOp : public CacheCKPTOp {
@@ -88,7 +102,7 @@ class LoadCKPTFromFilePathOp : public CacheCKPTOp {
   // Variables.
   std::string container_;
   std::string name_;
-  bool output_path_;
+  bool output_is_path_;
 };
 
 class UnPackCacheCKPTResourceOp : public CacheCKPTOp{

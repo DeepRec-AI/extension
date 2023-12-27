@@ -440,10 +440,12 @@ class AddRestoreCacheCKPTSubGraphHelper {
                                     const std::string& cache_path,
                                     const int64 cache_ckpt_replica,
                                     const int num_shards,
-                                    const std::string& local_storage_type)
+                                    const std::string& local_storage_type,
+                                    const std::string& remote_storage_type)
     : relative_nodes_(relative_nodes), cache_path_(cache_path),
       cache_ckpt_replica_(cache_ckpt_replica), num_shards_(num_shards),
-      local_storage_type_(local_storage_type) {}
+      local_storage_type_(local_storage_type),
+      remote_storage_type_(remote_storage_type) {}
 
   ~AddRestoreCacheCKPTSubGraphHelper() {}
 
@@ -745,6 +747,7 @@ class AddRestoreCacheCKPTSubGraphHelper {
 
     // Create RepatriateRemoteCacheCKPT op.
     NodeDef send_remote_cache_ckpt_def;
+    bool output_is_path = RemoteStorageIsFileSystem();
     TF_RETURN_IF_ERROR(NodeDefBuilder(send_node_name,
                                       "RepatriateRemoteCacheCKPT")
                        .Device(device_name)
@@ -753,6 +756,7 @@ class AddRestoreCacheCKPTSubGraphHelper {
                        .Input(shard_node->name(), 0, shard_node->output_type(0))
                        .Input(num_shards_node->name(), 0,
                               num_shards_node->output_type(0))
+                       .Attr("output_is_path", output_is_path)
                        .Finalize(&send_remote_cache_ckpt_def));
     send_node = g->AddNode(send_remote_cache_ckpt_def, &s);
     TF_RETURN_IF_ERROR(s);
@@ -763,6 +767,10 @@ class AddRestoreCacheCKPTSubGraphHelper {
     g->AddEdge(num_shards_node, 0, send_node, 2);
 
     return Status::OK();
+  }
+
+  bool RemoteStorageIsFileSystem() {
+    return remote_storage_type_ == StorageType::kPosixFileType;
   }
 
   Status AddGetRemoteCacheCKPTNodes(std::unique_ptr<Graph>& g,
@@ -970,6 +978,7 @@ class AddRestoreCacheCKPTSubGraphHelper {
   int64 cache_ckpt_replica_;
   int num_shards_;
   std::string local_storage_type_;
+  std::string remote_storage_type_;
 };
 } // Endof namespace cache_ckpt_pass
 
@@ -1024,7 +1033,7 @@ class CacheCKPTPass : public GraphOptimizationPass {
     restore_helper.reset(
       new cache_ckpt_pass::AddRestoreCacheCKPTSubGraphHelper(relative_nodes,
                              cache_path_, cache_ckpt_replica_, num_shards,
-                             local_storage_type_));
+                             local_storage_type_, remote_storage_type_));
     TF_RETURN_IF_ERROR(restore_helper->Run(new_graph));
 
     options.graph->swap(new_graph);
@@ -1132,9 +1141,21 @@ REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PLACEMENT, 0,
                       CacheCKPTPass);
 
 //------------------------------------------------------------------------------
-// Replace the specific 'Send'/'Recv' op with 'SliceSend'/'SliceRecv op.
+// Replace the specific 'Send'/'Recv' op with
+// 'SliceSend'/'SliceRecv' or 'FileSliceSend'/'FileSliceRecv' op.
 class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
  public:
+  ReplaceTransferOpWithSliceTransferOpPass() : GraphOptimizationPass() {
+    TF_CHECK_OK(GetSliceSizeFromEnvVar());
+    TF_CHECK_OK(GetSliceTransferTimeOutMillisecond());
+    TF_CHECK_OK(GetFileSliceRecvTMPDir());
+
+    VLOG(2) << "ReplaceTransferOp Pass config: [slice_size: (" << slice_size_
+            << ") bytes, recv_timeout: (" << timeout_ms_
+            << ") ms, file_recv_tmp_dir: ("
+            << file_slice_recv_tmp_dir_ << ")].";
+  }
+
   Status Run(const GraphOptimizationPassOptions& options) override {
     if (!IsEnableReplaceTransferOp()) {
       return Status::OK();
@@ -1144,9 +1165,6 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
       return errors::Internal("partition graphs should be available.");
     }
 
-    TF_RETURN_IF_ERROR(GetSliceSizeFromEnvVar());
-    TF_RETURN_IF_ERROR(GetSliceTransferTimeOutMillisecond());
-
     for (auto& pg : *(options.partition_graphs)) {
       Graph* graph = (pg.second).get();
       std::unique_ptr<Graph> new_graph(new Graph(OpRegistry::Global()));
@@ -1155,7 +1173,7 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
       (pg.second).swap(new_graph);
     }
 
-    VLOG(0) << "Replace transfer op with slice transfer op success.";
+    VLOG(2) << "Replace transfer op with slice transfer op success.";
 
     return Status::OK();
   }
@@ -1170,18 +1188,13 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
   }
 
   Status GetSliceSizeFromEnvVar() {
-    int64 slice_size = 0;
-    // default value is 512MB.
-    TF_RETURN_IF_ERROR(ReadInt64FromEnvVar("SLICE_TRANS_SIZE", 0x20000000,
-                                           &slice_size));
-    slice_size_ = slice_size;
-    return Status::OK();
+    // default value is 64 MB.
+    return ReadInt64FromEnvVar("SLICE_TRANS_SIZE", 0x4000000, &slice_size_);
   }
 
   Status GetSliceTransferTimeOutMillisecond() {
-    // default value is 5min.
-    return ReadInt64FromEnvVar("SLICE_TRANS_TIMEOUT_MS", 300000,
-                               &timeout_ms_);
+    // default value is 'never timout'.
+    return ReadInt64FromEnvVar("SLICE_TRANS_TIMEOUT_MS", 0, &timeout_ms_);
   }
 
   Status ModifyGraph(std::unique_ptr<Graph>& graph) {
@@ -1203,56 +1216,26 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
     Node* src_node = e->src();
     int out_idx = e->src_output();
 
-    // only replace ckpt data edge now.
-    const std::string& src_op = src_node->type_string();
-    auto attrs = n->attrs();
-    if ((src_op == "GenerateCacheCKPT" && \
-         out_idx == CacheCKPTOp::GenerateCacheCKPTOp::DataTensorOutputIdx) || \
-        (src_op == "RepatriateRemoteCacheCKPT" && out_idx == \
-         CacheCKPTOp::RepatriateRemoteCacheCKPTOp::DataTensorOutputIdx)) {
-      Node* new_send_node = nullptr;
-      TF_RETURN_IF_ERROR(NodeBuilder(n->name(), "_SliceSend")
-                         .Device(n->assigned_device_name())
-                         .Input(src_node, out_idx)
-                         .Attr("tensor_name", *(attrs.Find("tensor_name")))
-                         .Attr("send_device", *(attrs.Find("send_device")))
-                         .Attr("send_device_incarnation",
-                               *(attrs.Find("send_device_incarnation")))
-                         .Attr("recv_device", *(attrs.Find("recv_device")))
-                         .Attr("client_terminated",
-                               *(attrs.Find("client_terminated")))
-                         .Attr("slice_size", slice_size_)
-                         .Finalize(g.get(), &new_send_node));
-      TF_RETURN_IF_ERROR(g->UpdateEdge(src_node, out_idx, new_send_node, 0));
-      g->RemoveNode(n);
-    }
-
-    return Status::OK();
-  }
-
-  Status TryToReplaceRecvOp(std::unique_ptr<Graph>& g, Node* n) {
-    // only replace ckpt data edge now.
-    bool find_target_recv_node = false;
-    for (auto e : n->out_edges()) {
-      const std::string& dst_op = e->dst()->type_string();
-      int in_idx = e->dst_input();
-      if ((dst_op == "BackupRemoteCacheCKPT" && in_idx == \
-           CacheCKPTOp::BackupRemoteCacheCKPTOp::DataTensorInputIdx) || \
-          (dst_op == "GetRemoteCacheCKPT" && in_idx == \
-           CacheCKPTOp::GetRemoteCacheCKPTOp::DataTensorInputIdx)) {
-        find_target_recv_node = true;
-        break;
-      }
-    }
-    if (!find_target_recv_node) {
+    if (!NeedReplaceSendOp(src_node, out_idx)) {
       return Status::OK();
     }
 
+    std::string send_op = "_FileSliceSend";
+    if (src_node->type_string() == "RepatriateRemoteCacheCKPT") {
+      const AttrValue* output_is_path_attr = \
+        src_node->attrs().Find("output_is_path");
+      CHECK_NE(output_is_path_attr, nullptr);
+      bool output_is_path = output_is_path_attr->b();
+      if (!output_is_path) {
+        send_op = "_SliceSend";
+      }
+    }
+
     auto attrs = n->attrs();
-    Node* new_recv_node = nullptr;
-    TF_RETURN_IF_ERROR(NodeBuilder(n->name(), "_SliceRecv")
+    Node* new_send_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(n->name(), send_op)
                        .Device(n->assigned_device_name())
-                       .Attr("tensor_type", *(attrs.Find("tensor_type")))
+                       .Input(src_node, out_idx)
                        .Attr("tensor_name", *(attrs.Find("tensor_name")))
                        .Attr("send_device", *(attrs.Find("send_device")))
                        .Attr("send_device_incarnation",
@@ -1260,6 +1243,50 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
                        .Attr("recv_device", *(attrs.Find("recv_device")))
                        .Attr("client_terminated",
                              *(attrs.Find("client_terminated")))
+                       .Attr("slice_size", slice_size_)
+                       .Finalize(g.get(), &new_send_node));
+
+    TF_RETURN_IF_ERROR(g->UpdateEdge(src_node, out_idx, new_send_node, 0));
+    g->RemoveNode(n);
+
+    return Status::OK();
+  }
+
+  bool NeedReplaceSendOp(const Node* src_node, const int out_idx) {
+    using namespace CacheCKPTOp;
+
+    const std::string& src_op = src_node->type_string();
+
+    if (src_op == "GenerateCacheCKPT" && \
+        (out_idx == GenerateCacheCKPTOp::MetaCKPTOutputIdx || \
+         out_idx == GenerateCacheCKPTOp::DataCKPTOutputIdx)) {
+      return true;
+    } else if (src_op == "RepatriateRemoteCacheCKPT" && \
+               (out_idx == RepatriateRemoteCacheCKPTOp::MetaCKPTOutputIdx || \
+                out_idx == RepatriateRemoteCacheCKPTOp::DataCKPTOutputIdx)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  Status TryToReplaceRecvOp(std::unique_ptr<Graph>& g, Node* n) {
+    if (!NeedReplaceRecvOp(n)) {
+      return Status::OK();
+    }
+
+    auto attrs = n->attrs();
+    Node* new_recv_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(n->name(), "_FileSliceRecv")
+                       .Device(n->assigned_device_name())
+                       .Attr("tensor_name", *(attrs.Find("tensor_name")))
+                       .Attr("send_device", *(attrs.Find("send_device")))
+                       .Attr("send_device_incarnation",
+                             *(attrs.Find("send_device_incarnation")))
+                       .Attr("recv_device", *(attrs.Find("recv_device")))
+                       .Attr("client_terminated",
+                             *(attrs.Find("client_terminated")))
+                       .Attr("recv_dir", file_slice_recv_tmp_dir_)
                        .Attr("slice_size", slice_size_)
                        .Attr("timeout_ms", timeout_ms_)
                        .Finalize(g.get(), &new_recv_node));
@@ -1274,9 +1301,36 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
     return Status::OK();
   }
 
+  bool NeedReplaceRecvOp(const Node* n) {
+    using namespace CacheCKPTOp;
+
+    for (auto e : n->out_edges()) {
+      const std::string& dst_op = e->dst()->type_string();
+      int in_idx = e->dst_input();
+      if (dst_op == "BackupRemoteCacheCKPT" && \
+          (in_idx == BackupRemoteCacheCKPTOp::MetaCKPTInputIdx || \
+           in_idx == BackupRemoteCacheCKPTOp::DataCKPTInputIdx)) {
+        return true;
+      } else if (dst_op == "GetRemoteCacheCKPT" && \
+                 (in_idx == GetRemoteCacheCKPTOp::MetaCKPTInputIdx || \
+                  in_idx == GetRemoteCacheCKPTOp::DataCKPTInputIdx)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  Status GetFileSliceRecvTMPDir() {
+    return ReadStringFromEnvVar("CACHE_CKPT_FILE_SLICE_RECV_TMP_DIR",
+             "/tmp/tf_fault_tolerance/tmp_file_slice_recv_dir",
+             &file_slice_recv_tmp_dir_);
+  }
+
   // Variable.
   int64 slice_size_;
   int64 timeout_ms_;
+  string file_slice_recv_tmp_dir_;
 };
 
 REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PARTITIONING, 0,

@@ -34,6 +34,16 @@ class GenerateCacheCKPTOp : public CacheCKPTOp {
                       const Tensor& cache_path, const Tensor& shard,
                       const Tensor& num_shards);
 
+  void CreateLocalCacheCKPT(CacheCKPTManager* mgr,
+                            const std::string& cache_path,
+                            const std::string& ckpt_key,
+                            const std::string& ckpt_filename_prefix,
+                            const std::string& ckpt_meta_path,
+                            const std::string& ckpt_data_path);
+
+  Status OutputCKPT(OpKernelContext* ctx, CacheCKPTManager* mgr,
+                    const std::string& ckpt_key);
+
   // Variables.
   bool is_merged_meta_;
   std::string ckpt_storage_type_;

@@ -25,6 +25,13 @@ std::string GeneratePOSIXFilePath(const std::string& dir,
 
 void ParsePOSIXFilePath(const std::string& file_path, std::string& dir,
                         std::string& filename);
+
+namespace io_utils {
+
+Status CopyFile(const string& src, const string& target);
+
+} // end of namespace io_utils.
+
 } // End of namespace tensorflow.
 
 #endif // End of TF_FAULT_TOLERANCE_CC_UTILS_PLATFORM_FILE_H_

@@ -36,7 +36,16 @@ int64 CacheCKPTStorage::global_step() const {
 // functions of MemoryCacheCKPTStorage.
 
 MemoryCacheCKPTStorage::MemoryCacheCKPTStorage(const int64 global_step)
-  : CacheCKPTStorage(global_step) {}
+  : CacheCKPTStorage(global_step) {
+  AllocationAttributes attr;
+  attr.allocation_will_be_logged = true;
+
+  Tensor meta_tmp(cpu_allocator(), DT_STRING, TensorShape({}), attr);
+  cache_ckpt_meta_tensor_ = meta_tmp;
+
+  Tensor data_tmp(cpu_allocator(), DT_STRING, TensorShape({}), attr);
+  cache_ckpt_data_tensor_ = data_tmp;
+}
 
 MemoryCacheCKPTStorage::~MemoryCacheCKPTStorage() {}
 
@@ -47,11 +56,38 @@ Status MemoryCacheCKPTStorage::Write(const Tensor& ckpt_meta_tensor,
   return Status::OK();
 }
 
+Status MemoryCacheCKPTStorage::Write(const std::string& ckpt_meta_file_path,
+                                     const std::string& ckpt_data_file_path,
+                                     const bool delete_src_file) {
+  Env* env = Env::Default();
+  auto ckpt_meta_buffer = cache_ckpt_meta_tensor_.scalar<tstring>().data();
+  TF_RETURN_IF_ERROR(
+    ReadFileToString(env, ckpt_meta_file_path, ckpt_meta_buffer));
+
+  auto ckpt_data_buffer = cache_ckpt_data_tensor_.scalar<tstring>().data();
+  TF_RETURN_IF_ERROR(
+    ReadFileToString(env, ckpt_data_file_path, ckpt_data_buffer));
+
+  if (delete_src_file) {
+    env->DeleteFile(ckpt_meta_file_path);
+    env->DeleteFile(ckpt_data_file_path);
+  }
+
+  return Status::OK();
+}
+
 Status MemoryCacheCKPTStorage::Read(Tensor& ckpt_meta_tensor,
                                     Tensor& ckpt_data_tensor) const {
   ckpt_meta_tensor = cache_ckpt_meta_tensor_;
   ckpt_data_tensor = cache_ckpt_data_tensor_;
   return Status::OK();
+}
+
+Status MemoryCacheCKPTStorage::Read(std::string& ckpt_meta_file_path,
+                                    std::string& ckpt_data_file_path,
+                                    const bool get_ckpt_full_path) const {
+
+  return errors::Unimplemented("MemoryCacheCKPTStorage::Read() is not implemented");
 }
 
 //------------------------------------------------------------------------------
@@ -96,7 +132,6 @@ Status POSIXFileCacheCKPTStorage::Write(const Tensor& ckpt_meta_tensor,
   // Try to create cache_ckpt_path directory.
   TF_RETURN_IF_ERROR(env->RecursivelyCreateDir(cache_path_));
 
-
   // Write new cache ckpt to file.
   TF_RETURN_IF_ERROR(WriteStringToFile(env, cache_ckpt_meta_file_path_,
                        ckpt_meta_tensor.scalar<tstring>()()));
@@ -106,16 +141,32 @@ Status POSIXFileCacheCKPTStorage::Write(const Tensor& ckpt_meta_tensor,
   return Status::OK();
 }
 
-Status POSIXFileCacheCKPTStorage::Read(Tensor& ckpt_meta_tensor,
-                                    Tensor& ckpt_data_tensor) const {
-  if (is_local_ckpt_) {
-    // local ckpt: return cache ckpt file path prefix.
-    ckpt_meta_tensor.scalar<tstring>()() = cache_ckpt_file_path_prefix_;
-    ckpt_data_tensor.scalar<tstring>()() = cache_ckpt_file_path_prefix_;
-    return Status::OK();
+Status POSIXFileCacheCKPTStorage::Write(
+                                    const std::string& ckpt_meta_file_path,
+                                    const std::string& ckpt_data_file_path,
+                                    const bool delete_src_file) {
+  Env* env = Env::Default();
+  // Try to create cache_ckpt_path directory.
+  TF_RETURN_IF_ERROR(env->RecursivelyCreateDir(cache_path_));
+
+  // move ckpt file to cache_ckpt_path directory.
+  if (delete_src_file) {
+    TF_RETURN_IF_ERROR(env->RenameFile(ckpt_meta_file_path,
+                                       cache_ckpt_meta_file_path_));
+    TF_RETURN_IF_ERROR(env->RenameFile(ckpt_data_file_path,
+                                       cache_ckpt_data_file_path_));
+  } else {
+    TF_RETURN_IF_ERROR(io_utils::CopyFile(ckpt_meta_file_path,
+                                          cache_ckpt_meta_file_path_));
+    TF_RETURN_IF_ERROR(io_utils::CopyFile(ckpt_data_file_path,
+                                          cache_ckpt_data_file_path_));
   }
 
-  // remote ckpt: return cache ckpt tensor.
+  return Status::OK();
+}
+
+Status POSIXFileCacheCKPTStorage::Read(Tensor& ckpt_meta_tensor,
+                                    Tensor& ckpt_data_tensor) const {
   Env* env = Env::Default();
   auto ckpt_meta_buffer = ckpt_meta_tensor.scalar<tstring>().data();
   TF_RETURN_IF_ERROR(ReadFileToString(env, cache_ckpt_meta_file_path_,
@@ -123,6 +174,21 @@ Status POSIXFileCacheCKPTStorage::Read(Tensor& ckpt_meta_tensor,
   auto ckpt_data_buffer = ckpt_data_tensor.scalar<tstring>().data();
   TF_RETURN_IF_ERROR(ReadFileToString(env, cache_ckpt_data_file_path_,
                                       ckpt_data_buffer));
+
+  return Status::OK();
+}
+
+Status POSIXFileCacheCKPTStorage::Read(std::string& ckpt_meta_file_path,
+                                       std::string& ckpt_data_file_path,
+                                       const bool get_ckpt_full_path) const {
+  if (get_ckpt_full_path) {
+    ckpt_meta_file_path = cache_ckpt_meta_file_path_;
+    ckpt_data_file_path = cache_ckpt_data_file_path_;
+    return Status::OK();
+  }
+
+  ckpt_meta_file_path = cache_ckpt_file_path_prefix_;
+  ckpt_data_file_path = cache_ckpt_file_path_prefix_;
 
   return Status::OK();
 }

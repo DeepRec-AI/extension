@@ -21,19 +21,23 @@ namespace tensorflow {
 namespace CacheCKPTOp {
 
 namespace GenerateCacheCKPTOp {
-extern int DataTensorOutputIdx;
+extern int MetaCKPTOutputIdx;
+extern int DataCKPTOutputIdx;
 } // End of namespace GenerateCacheCKPTOp
 
 namespace BackupRemoteCacheCKPTOp {
-extern int DataTensorInputIdx;
+extern int MetaCKPTInputIdx;
+extern int DataCKPTInputIdx;
 } // End of namespace BackupRemoteCacheCKPTOp
 
 namespace GetRemoteCacheCKPTOp {
-extern int DataTensorInputIdx;
+extern int MetaCKPTInputIdx;
+extern int DataCKPTInputIdx;
 } // End of namespace GetRemoteCacheCKPTOp
 
 namespace RepatriateRemoteCacheCKPTOp {
-extern int DataTensorOutputIdx;
+extern int MetaCKPTOutputIdx;
+extern int DataCKPTOutputIdx;
 } // End of namespace RepatriateRemoteCacheCKPTOp
 
 } // End of namespace CacheCKPTOp

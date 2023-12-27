@@ -46,7 +46,32 @@ CacheCKPTManager::~CacheCKPTManager() {
   cache_ckpts_.clear();
 }
 
-void CacheCKPTManager::UpdateCacheCKPT(const std::string& ckpt_key,
+Status CacheCKPTManager::GetOrCreateStorage(
+                           const std::string& shard_key, int64 global_step,
+                           const struct CacheCKPTManagerParams& params,
+                           std::unique_ptr<CacheCKPTStorage>& storage_ptr) {
+  bool already_exist = false;
+  {
+    tf_shared_lock l(mu_);
+    already_exist = \
+      cache_ckpts_.find(shard_key) != cache_ckpts_.end() && \
+      (cache_ckpts_[shard_key])->global_step() == global_step;
+  }
+
+  if (!already_exist) {
+    return CreateStorage(params, global_step, shard_key, storage_ptr);
+  }
+
+  // reuse.
+  mutex_lock l(mu_);
+  storage_ptr = std::move(cache_ckpts_[shard_key]);
+  cache_ckpts_.erase(shard_key);
+
+  return Status::OK();
+}
+
+void CacheCKPTManager::UpdateCacheCKPT(
+                         const std::string& ckpt_key,
                          const Tensor& ckpt_meta_tensor,
                          const Tensor& ckpt_data_tensor,
                          const struct CacheCKPTManagerParams& params) {
@@ -56,20 +81,42 @@ void CacheCKPTManager::UpdateCacheCKPT(const std::string& ckpt_key,
 
   Status s;
   std::unique_ptr<CacheCKPTStorage> storage_ptr;
-  if (cache_ckpts_.find(shard_key) != cache_ckpts_.end() && \
-      (cache_ckpts_[shard_key])->global_step() == global_step) {
-    // reuse.
-    storage_ptr = std::move(cache_ckpts_[shard_key]);
-  } else {
-    s = GetStorage(params, global_step, shard_key, storage_ptr);
-    if (!s.ok()) {
-      LOG(WARNING) << "CacheCKPTManager: Failed to update cache ckpt ("
-                   << s.error_message() << ").";
-      return;
-    }
+  s = GetOrCreateStorage(shard_key, global_step, params, storage_ptr);
+  if (!s.ok()) {
+    LOG(WARNING) << "CacheCKPTManager: Failed to get storage ("
+                 << s.error_message() << ").";
   }
 
   s = storage_ptr->Write(ckpt_meta_tensor, ckpt_data_tensor);
+  if (!s.ok()) {
+    LOG(WARNING) << "CacheCKPTManager: Failed to update cache ckpt ("
+                 << s.error_message() << ").";
+    return;
+  }
+
+  mutex_lock l(mu_);
+  cache_ckpts_[shard_key] = std::move(storage_ptr);
+}
+
+void CacheCKPTManager::UpdateCacheCKPT(
+                         const std::string& ckpt_key,
+                         const std::string& meta_file_path,
+                         const std::string& data_file_path,
+                         const bool delete_src_file,
+                         const struct CacheCKPTManagerParams& params) {
+  std::string shard_key;
+  int64 global_step = 0;
+  ParseCKPTKey(ckpt_key, shard_key, global_step);
+
+  Status s;
+  std::unique_ptr<CacheCKPTStorage> storage_ptr;
+  s = GetOrCreateStorage(shard_key, global_step, params, storage_ptr);
+  if (!s.ok()) {
+    LOG(WARNING) << "CacheCKPTManager: Failed to get storage ("
+                 << s.error_message() << ").";
+  }
+
+  s = storage_ptr->Write(meta_file_path, data_file_path, delete_src_file);
   if (!s.ok()) {
     LOG(WARNING) << "CacheCKPTManager: Failed to update cache ckpt ("
                  << s.error_message() << ").";
@@ -103,26 +150,53 @@ bool CacheCKPTManager::TryToGetCacheCKPT(const std::string& ckpt_key,
   return true;
 }
 
-Status CacheCKPTManager::GetStorage(const struct CacheCKPTManagerParams& params,
-                                    const int64 global_step,
-                                    const std::string& shard_key,
-                                    std::unique_ptr<CacheCKPTStorage>& ptr) {
+bool CacheCKPTManager::TryToGetCacheCKPT(const std::string& ckpt_key,
+                                         const bool get_ckpt_full_path,
+                                         std::string& ckpt_meta_file_path,
+                                         std::string& ckpt_data_file_path) {
+  std::string shard_key;
+  int64 global_step = 0;
+  ParseCKPTKey(ckpt_key, shard_key, global_step);
+
+  tf_shared_lock l(mu_);
+  if (cache_ckpts_.count(shard_key) == 0 || \
+      (cache_ckpts_[shard_key])->global_step() != global_step) {
+    return false;
+  }
+
+  Status s = \
+    (cache_ckpts_[shard_key])->Read(ckpt_meta_file_path, ckpt_data_file_path,
+                                    get_ckpt_full_path);
+  if (!s.ok()) {
+    LOG(WARNING) << "CacheCKPTManager: Failed get cache ckpt ("
+                 << s.error_message() << ").";
+    return false;
+  }
+
+  return true;
+}
+
+Status CacheCKPTManager::CreateStorage(
+                           const struct CacheCKPTManagerParams& params,
+                           const int64 global_step,
+                           const std::string& shard_key,
+                           std::unique_ptr<CacheCKPTStorage>& ptr) {
   bool is_local_ckpt = params.is_local_ckpt;
   const std::string& storage_type = params.storage_type;
 
   if (storage_type == StorageType::kMemoryType) {
-      ptr.reset(new MemoryCacheCKPTStorage(global_step));
-      return Status::OK();
+    ptr.reset(new MemoryCacheCKPTStorage(global_step));
+    return Status::OK();
   } else if (storage_type == StorageType::kPosixFileType) {
-      const std::string& cache_path = params.cache_path;
-      const std::string& ckpt_filename_prefix = params.ckpt_filename_prefix;
-      int32 shard, num_shards;
-      ParseShardKey(shard_key, shard, num_shards);
-      const bool is_merged_meta = params.is_merged_meta;
-      ptr.reset(new POSIXFileCacheCKPTStorage(cache_path, ckpt_filename_prefix,
-                      global_step, shard, num_shards, is_local_ckpt,
-                      is_merged_meta));
-      return Status::OK();
+    const std::string& cache_path = params.cache_path;
+    const std::string& filename_prefix = params.ckpt_filename_prefix;
+    int32 shard, num_shards;
+    ParseShardKey(shard_key, shard, num_shards);
+    const bool is_merged_meta = params.is_merged_meta;
+    ptr.reset(new POSIXFileCacheCKPTStorage(
+                    cache_path, filename_prefix, global_step, shard, num_shards,
+                    is_local_ckpt, is_merged_meta));
+    return Status::OK();
   }
 
   return errors::InvalidArgument("CacheCKPTManager: Invalid Storage Type: "

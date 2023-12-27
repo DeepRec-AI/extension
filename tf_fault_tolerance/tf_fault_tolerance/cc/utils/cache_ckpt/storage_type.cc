@@ -29,7 +29,7 @@ std::string GetLocalCacheCKPTStorageTypeFromEnvVar() {
 std::string GetRemoteCacheCKPTStorageTypeFromEnvVar() {
   std::string storage_type;
   TF_CHECK_OK(ReadStringFromEnvVar("REMOTE_CACHE_CKPT_STORAGE_TYPE",
-                                   StorageType::kMemoryType, &storage_type));
+                                   StorageType::kPosixFileType, &storage_type));
   return storage_type;
 }
 

@@ -32,8 +32,16 @@ class CacheCKPTStorage {
   virtual Status Write(const Tensor& ckpt_meta_tenosr,
                        const Tensor& ckpt_data_tensor) = 0;
 
+  virtual Status Write(const std::string& ckpt_meta_file_path,
+                       const std::string& ckpt_data_file_path,
+                       const bool delete_src_file) = 0;
+
   virtual Status Read(Tensor& ckpt_meta_tensor,
                       Tensor& ckpt_data_tensor) const = 0;
+
+  virtual Status Read(std::string& ckpt_meta_file_path,
+                      std::string& ckpt_data_file_path,
+                      const bool get_ckpt_full_path) const = 0;
 
   int64 global_step() const;
 
@@ -50,8 +58,16 @@ class MemoryCacheCKPTStorage : public CacheCKPTStorage {
   Status Write(const Tensor& ckpt_meta_tensor,
                const Tensor& ckpt_data_tensor) override;
 
+  Status Write(const std::string& ckpt_meta_file_path,
+               const std::string& ckpt_data_file_path,
+               const bool delete_src_file) override;
+
   Status Read(Tensor& ckpt_meta_tensor,
               Tensor& ckpt_data_tensor) const override;
+
+  Status Read(std::string& ckpt_meta_file_path,
+              std::string& ckpt_data_file_path,
+              const bool get_ckpt_full_path) const override;
 
  private:
   Tensor cache_ckpt_meta_tensor_;
@@ -82,8 +98,17 @@ class POSIXFileCacheCKPTStorage : public CacheCKPTStorage {
 
   Status Write(const Tensor& ckpt_meta_tensor,
                const Tensor& ckpt_data_tensor) override;
+
+  Status Write(const std::string& ckpt_meta_file_path,
+               const std::string& ckpt_data_file_path,
+               const bool delete_src_file) override;
+
   Status Read(Tensor& ckpt_meta_tensor,
               Tensor& ckpt_data_tensor) const override;
+
+  Status Read(std::string& ckpt_meta_file_path,
+              std::string& ckpt_data_file_path,
+              const bool get_ckpt_full_path) const override;
 
  private:
   // Variables.

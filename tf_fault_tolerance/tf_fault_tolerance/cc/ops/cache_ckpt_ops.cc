@@ -52,7 +52,8 @@ REGISTER_OP("GenerateCacheCKPT")
 
 namespace CacheCKPTOp {
 namespace GenerateCacheCKPTOp {
-int DataTensorOutputIdx = 2;
+int MetaCKPTOutputIdx = 1;
+int DataCKPTOutputIdx = 2;
 } // End of namespace GenerateCacheCKPTOp
 } // End of namespace CacheCKPTOp
 
@@ -77,7 +78,8 @@ REGISTER_OP("BackupRemoteCacheCKPT")
 
 namespace CacheCKPTOp {
 namespace BackupRemoteCacheCKPTOp {
-int DataTensorInputIdx = 3;
+int MetaCKPTInputIdx = 2;
+int DataCKPTInputIdx = 3;
 } // End of namespace BackupRemoteCacheCKPTOp
 } // End of namespace CacheCKPTOp
 
@@ -137,7 +139,8 @@ REGISTER_OP("GetRemoteCacheCKPT")
 
 namespace CacheCKPTOp {
 namespace GetRemoteCacheCKPTOp {
-int DataTensorInputIdx = 5;
+int MetaCKPTInputIdx = 4;
+int DataCKPTInputIdx = 5;
 } // End of namespace GetRemoteCacheCKPTOp
 } // End of namespace CacheCKPTOp
 
@@ -149,6 +152,7 @@ REGISTER_OP("RepatriateRemoteCacheCKPT")
     .Output("ckpt_key: string")
     .Output("cache_ckpt_meta: string")
     .Output("cache_ckpt_data: string")
+    .Attr("output_is_path: bool = true")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       ShapeHandle unused;
 
@@ -168,7 +172,8 @@ REGISTER_OP("RepatriateRemoteCacheCKPT")
 
 namespace CacheCKPTOp {
 namespace RepatriateRemoteCacheCKPTOp {
-int DataTensorOutputIdx = 3;
+int MetaCKPTOutputIdx = 2;
+int DataCKPTOutputIdx = 3;
 } // End of namespace RepatriateRemoteCacheCKPTOp
 } // End of namespace CacheCKPTOp
 
@@ -179,7 +184,7 @@ REGISTER_OP("LoadCKPTFromFilePath")
     .Output("cache_ckpt: resource")
     .Attr("container: string = ''")
     .Attr("shared_name: string = 'cache_ckpt'")
-    .Attr("output_path: bool = true")
+    .Attr("output_is_path: bool = true")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       ShapeHandle unused;
 

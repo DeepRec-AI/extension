@@ -29,11 +29,11 @@ limitations under the License.
 namespace tensorflow {
 
 struct CacheCKPTManagerParams {
-  bool is_local_ckpt;
-  bool is_merged_meta;
-  std::string cache_path;
+  bool is_local_ckpt; // input ckpt belongs to local ps or not
+  bool is_merged_meta; // meta file is merged or not
+  std::string cache_path; // path to cache dir
   std::string ckpt_filename_prefix; // without global step, shard and num_shards
-  std::string storage_type;
+  std::string storage_type; // storage type to store cache ckpt
 };
 
 class CacheCKPTManager {
@@ -45,8 +45,19 @@ class CacheCKPTManager {
                        const Tensor& ckpt_data_tensor,
                        const struct CacheCKPTManagerParams& params);
 
+  void UpdateCacheCKPT(const std::string& ckpt_key,
+                       const std::string& ckpt_meta_file_path,
+                       const std::string& ckpt_data_file_path,
+                       const bool delete_src_file,
+                       const struct CacheCKPTManagerParams& params);
+
   bool TryToGetCacheCKPT(const std::string& ckpt_key, Tensor& ckpt_meta_tensor,
                          Tensor& ckpt_data_tensor);
+
+  bool TryToGetCacheCKPT(const std::string& ckpt_key,
+                         const bool get_ckpt_full_path,
+                         std::string& ckpt_meta_file_path,
+                         std::string& ckpt_data_file_path);
 
   std::string DebugString() const;
 
@@ -55,9 +66,13 @@ class CacheCKPTManager {
   CacheCKPTManager();
   ~CacheCKPTManager();
 
-  Status GetStorage(const struct CacheCKPTManagerParams& params,
-                    const int64 global_step, const std::string& shard_key,
-                    std::unique_ptr<CacheCKPTStorage>& ptr);
+  Status GetOrCreateStorage(const std::string& shard_key, int64 global_step,
+                          const struct CacheCKPTManagerParams& params,
+                          std::unique_ptr<CacheCKPTStorage>& storage_ptr);
+
+  Status CreateStorage(const struct CacheCKPTManagerParams& params,
+                       const int64 global_step, const std::string& shard_key,
+                       std::unique_ptr<CacheCKPTStorage>& ptr);
 
   // Variables.
   mutex mu_;

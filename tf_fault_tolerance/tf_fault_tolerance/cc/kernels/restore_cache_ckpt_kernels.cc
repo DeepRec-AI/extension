@@ -62,32 +62,21 @@ void CheckLocalCacheCKPTOp::Compute(OpKernelContext* context) {
   // Create resource handle.
   ResourceHandle handle = \
     MakeResourceHandle<CacheCKPTVar>(context, container_, name_);
-  cache_ckpt_handle_tensor->scalar<ResourceHandle>()() = handle;
 
   // Try to get cache ckpt.
-  CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
-  const std::string ckpt_key = \
+  const std::string& ckpt_key = \
     GenerateCKPTKey(ckpt_path_prefix, shard, num_shards);
-  Tensor ckpt_meta_tensor, ckpt_data_tensor;
-  OP_REQUIRES_OK(context, context->allocate_temp(DT_STRING, TensorShape({}),
-                                                 &ckpt_meta_tensor));
-  OP_REQUIRES_OK(context, context->allocate_temp(DT_STRING, TensorShape({}),
-                                                 &ckpt_data_tensor));
-  bool exist_cache_ckpt = cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key,
-                                            ckpt_meta_tensor, ckpt_data_tensor);
+  bool exist_cache_ckpt = false;
+  OP_REQUIRES_OK(context, TryToGetCacheCKPT(context, ckpt_key, handle,
+                                            exist_cache_ckpt));
   exist_cache_ckpt_tensor->scalar<bool>()() = exist_cache_ckpt;
-  if (!exist_cache_ckpt) {
-    LOG(WARNING) << "CheckLocalCacheCKPTOp: Local cache ckpt does not exist.";
-    return;
-  } else {
-    LOG(INFO) << "CacheCKPT: Use cache ckpt on local storage.";
-  }
+  cache_ckpt_handle_tensor->scalar<ResourceHandle>()() = handle;
 
-  core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
-  OP_REQUIRES_OK(context,
-                 GetOrCreateCacheCKPTVar(context, handle, cache_ckpt_var));
-  mutex_lock ml(*(cache_ckpt_var->mu()));
-  cache_ckpt_var->update(ckpt_meta_tensor, ckpt_data_tensor);
+  if (exist_cache_ckpt) {
+    LOG(INFO) << "CacheCKPT: Use cache ckpt on local storage.";
+  } else {
+    LOG(WARNING) << "CheckLocalCacheCKPTOp: Local cache ckpt does not exist.";
+  }
 }
 
 void CheckLocalCacheCKPTOp::ValidateInputs(OpKernelContext* context,
@@ -103,6 +92,33 @@ void CheckLocalCacheCKPTOp::ValidateInputs(OpKernelContext* context,
   OP_REQUIRES(context, TensorShapeUtils::IsScalar(num_shards.shape()),
               errors::InvalidArgument("num_shards is not a scalar: ",
                                       num_shards.shape().DebugString()));
+}
+
+Status CheckLocalCacheCKPTOp::TryToGetCacheCKPT(OpKernelContext* ctx,
+                                                const std::string& ckpt_key,
+                                                ResourceHandle& handle,
+                                                bool& is_exist_cache) {
+  Tensor meta_tensor, data_tensor;
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DT_STRING, TensorShape({}),
+                                        &meta_tensor));
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DT_STRING, TensorShape({}),
+                                        &data_tensor));
+
+  std::string& meta_file = meta_tensor.scalar<tstring>()();
+  std::string& data_file = data_tensor.scalar<tstring>()();
+
+  CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
+  is_exist_cache = \
+    cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key, false, meta_file, data_file);
+
+  if (is_exist_cache) {
+    core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
+    TF_RETURN_IF_ERROR(GetOrCreateCacheCKPTVar(ctx, handle, cache_ckpt_var));
+    mutex_lock ml(*(cache_ckpt_var->mu()));
+    cache_ckpt_var->update(meta_tensor, data_tensor);
+  }
+
+  return Status::OK();
 }
 
 REGISTER_KERNEL_BUILDER(Name("CheckLocalCacheCKPT").Device(DEVICE_CPU),
@@ -157,27 +173,26 @@ void GetRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
     MakeResourceHandle<CacheCKPTVar>(context, container_, name_);
   ckpt_handle_tensor->scalar<ResourceHandle>()() = handle;
 
-
   bool exist_cache_ckpt_out = false;
+  const std::string& ckpt_meta_file = ckpt_meta_tensor.scalar<tstring>()();
+  const std::string& ckpt_data_file = ckpt_data_tensor.scalar<tstring>()();
   if (exist_cache_ckpt) {
     // Generate local cache ckpt.
-    struct CacheCKPTManagerParams params;
-    params.is_local_ckpt = true;
-    params.is_merged_meta = is_merged_meta_;
-    params.storage_type = ckpt_storage_type_;
-    params.cache_path = cache_path;
-    params.ckpt_filename_prefix = ckpt_filename_prefix_without_global_step;
-    OP_REQUIRES_OK(context, GenerateLocalCacheCKPT(context, params, handle,
-                              ckpt_key, ckpt_meta_tensor, ckpt_data_tensor,
-                              exist_cache_ckpt_out));
+    OP_REQUIRES_OK(context,
+                   GenerateLocalCacheCKPT(context, handle, ckpt_key, cache_path,
+                     ckpt_filename_prefix_without_global_step, ckpt_meta_file,
+                     ckpt_data_file, exist_cache_ckpt_out));
   } else {
     LOG(WARNING) << "GetRemoteCacheCKPTOp: Remote cache ckpt does not exist.";
+    Env* env = Env::Default();
+    env->DeleteFile(ckpt_meta_file);
+    env->DeleteFile(ckpt_data_file);
   }
 
-  if (exist_cache_ckpt_out == false) {
-    LOG(WARNING) << "GetRemoteCacheCKPTOp: Failed to fetch remote cache ckpt.";
-  } else {
+  if (exist_cache_ckpt_out) {
     LOG(INFO) << "CacheCKPT: Get remote cache ckpt success.";
+  } else {
+    LOG(WARNING) << "GetRemoteCacheCKPTOp: Failed to fetch remote cache ckpt.";
   }
   exist_cache_ckpt_out_tensor->scalar<bool>()() = exist_cache_ckpt_out;
 }
@@ -209,32 +224,44 @@ void GetRemoteCacheCKPTOp::ValidateInputs(OpKernelContext* context,
                                       ckpt_data.shape().DebugString()));
 }
 
-Status GetRemoteCacheCKPTOp::GenerateLocalCacheCKPT(OpKernelContext* context,
-                               struct CacheCKPTManagerParams& params,
+Status GetRemoteCacheCKPTOp::GenerateLocalCacheCKPT(
+                               OpKernelContext* context,
                                ResourceHandle& handle,
                                const std::string& ckpt_key,
-                               const Tensor& ckpt_meta_tensor,
-                               const Tensor& ckpt_data_tensor,
+                               const std::string& cache_path,
+                               const std::string& ckpt_filename_prefix,
+                               const std::string& meta_file,
+                               const std::string& data_file,
                                bool& exist_cache_ckpt) {
-  Tensor ckpt_meta_out_tensor, ckpt_data_out_tensor;
-  TF_RETURN_IF_ERROR(context->allocate_temp(DT_STRING, TensorShape({}),
-                                            &ckpt_meta_out_tensor));
-  TF_RETURN_IF_ERROR(context->allocate_temp(DT_STRING, TensorShape({}),
-                                            &ckpt_data_out_tensor));
+  struct CacheCKPTManagerParams params;
+  params.is_local_ckpt = true;
+  params.is_merged_meta = is_merged_meta_;
+  params.storage_type = ckpt_storage_type_;
+  params.cache_path = cache_path;
+  params.ckpt_filename_prefix = ckpt_filename_prefix;
 
   CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
-  cache_ckpt_mgr->UpdateCacheCKPT(ckpt_key, ckpt_meta_tensor, ckpt_data_tensor,
-                                  params);
+  cache_ckpt_mgr->UpdateCacheCKPT(ckpt_key, meta_file, data_file, true, params);
+
+  Tensor meta_out_tensor, data_out_tensor;
+  TF_RETURN_IF_ERROR(context->allocate_temp(DT_STRING, TensorShape({}),
+                                            &meta_out_tensor));
+  TF_RETURN_IF_ERROR(context->allocate_temp(DT_STRING, TensorShape({}),
+                                            &data_out_tensor));
+  std::string& meta_file_out = meta_out_tensor.scalar<tstring>()();
+  std::string& data_file_out = data_out_tensor.scalar<tstring>()();
   exist_cache_ckpt = \
-    cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key, ckpt_meta_out_tensor,
-                                      ckpt_data_out_tensor);
+    cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key, false, meta_file_out,
+                                      data_file_out);
+
   core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
   TF_RETURN_IF_ERROR(GetOrCreateCacheCKPTVar(context, handle, cache_ckpt_var));
   mutex_lock ml(*(cache_ckpt_var->mu()));
-  cache_ckpt_var->update(ckpt_meta_out_tensor, ckpt_data_out_tensor);
+  cache_ckpt_var->update(meta_out_tensor, data_out_tensor);
 
   return Status::OK();
 }
+
 REGISTER_KERNEL_BUILDER(Name("GetRemoteCacheCKPT").Device(DEVICE_CPU),
                         GetRemoteCacheCKPTOp);
 
@@ -243,7 +270,9 @@ REGISTER_KERNEL_BUILDER(Name("GetRemoteCacheCKPT").Device(DEVICE_CPU),
 
 RepatriateRemoteCacheCKPTOp::RepatriateRemoteCacheCKPTOp(
                                OpKernelConstruction* context)
-  : CacheCKPTOp(context) {}
+  : CacheCKPTOp(context) {
+  OP_REQUIRES_OK(context, context->GetAttr("output_is_path", &output_is_path_));
+}
 
 RepatriateRemoteCacheCKPTOp::~RepatriateRemoteCacheCKPTOp() {}
 
@@ -281,10 +310,8 @@ void RepatriateRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
   ckpt_key_tensor->scalar<tstring>()() = ckpt_key;
 
   // Fill ckpt_tensor
-  CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
   bool exist_cache_ckpt = \
-    cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key, *ckpt_meta_tensor,
-                                      *ckpt_data_tensor);
+    FillCacheCKPTOutput(ckpt_key, *ckpt_meta_tensor, *ckpt_data_tensor);
 
   // Fill exist_cache_ckpt_tensor
   exist_cache_ckpt_tensor->scalar<bool>()() = exist_cache_ckpt;
@@ -305,6 +332,21 @@ void RepatriateRemoteCacheCKPTOp::ValidateInputs(OpKernelContext* context,
                                       num_shards.shape().DebugString()));
 }
 
+bool RepatriateRemoteCacheCKPTOp::FillCacheCKPTOutput(
+                                    const std::string& ckpt_key,
+                                    Tensor& ckpt_meta, Tensor& ckpt_data) {
+  CacheCKPTManager* ckpt_mgr = CacheCKPTManager::GetInstance();
+
+  if (output_is_path_) {
+    std::string& meta_path = ckpt_meta.scalar<tstring>()();
+    std::string& data_path = ckpt_data.scalar<tstring>()();
+
+    return ckpt_mgr->TryToGetCacheCKPT(ckpt_key, true, meta_path, data_path);
+  }
+
+  return ckpt_mgr->TryToGetCacheCKPT(ckpt_key, ckpt_meta, ckpt_data);
+}
+
 REGISTER_KERNEL_BUILDER(Name("RepatriateRemoteCacheCKPT").Device(DEVICE_CPU),
                         RepatriateRemoteCacheCKPTOp);
 
@@ -315,7 +357,7 @@ LoadCKPTFromFilePathOp::LoadCKPTFromFilePathOp(OpKernelConstruction* context)
   : CacheCKPTOp(context) {
   OP_REQUIRES_OK(context, context->GetAttr("container", &container_));
   OP_REQUIRES_OK(context, context->GetAttr("shared_name", &name_));
-  OP_REQUIRES_OK(context, context->GetAttr("output_path", &output_path_));
+  OP_REQUIRES_OK(context, context->GetAttr("output_is_path", &output_is_path_));
 }
 
 LoadCKPTFromFilePathOp::~LoadCKPTFromFilePathOp() {}
@@ -351,7 +393,7 @@ void LoadCKPTFromFilePathOp::Compute(OpKernelContext* context) {
                                                  &ckpt_meta_tensor));
   OP_REQUIRES_OK(context, context->allocate_temp(DT_STRING, TensorShape({}),
                                                  &ckpt_data_tensor));
-  if (output_path_) {
+  if (output_is_path_) {
     ckpt_meta_tensor.scalar<tstring>()() = ckpt_path_prefix;
     ckpt_data_tensor.scalar<tstring>()() = ckpt_path_prefix;
   } else {
