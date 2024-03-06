@@ -9,8 +9,10 @@
 
 #if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
 #include "tensorflow/core/framework/embedding/embedding_var.h"
-#else
+#elif (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1012L
 #include "tensorflow/core/framework/embedding_var.h"
+#else // version = 1.4.0
+#include "tensorflow/core/kernels/kv_variable_ops.h"
 #endif
 
 namespace tensorflow {
@@ -46,7 +48,7 @@ class ResourceStatOp: public OpKernel {
       if (item.size() == 2) {
         int64 var_size = std::stoi(item[1]);
         if (var_size == -1) {
-          EmbeddingVar<int64, float>* r;
+          EmbeddingVar<int64, float>* r = nullptr;
           TF_CHECK_OK(rm->Lookup("", item[0], &r));
           // TODO add EV size.
           LOG(INFO) << "ev: " << r->DebugString();
@@ -69,7 +71,7 @@ REGISTER_KERNEL_BUILDER(Name("ResourceStat").Device(DEVICE_CPU),
                         ResourceStatOp);
 
 REGISTER_OP("TimeStamp")
-  .Output("time_stamp: int64")
+  .Output("time_stamp_in_us: int64")
   .SetIsStateful()
   .SetShapeFn([](shape_inference::InferenceContext* c) {
     c->set_output(0, c->Scalar());

@@ -1,5 +1,6 @@
 #include <queue>
 
+#include <absl/strings/match.h>
 #include <tensorflow/core/common_runtime/optimization_registry.h>
 #include <tensorflow/core/framework/op_kernel.h>
 #include <tensorflow/core/framework/register_types.h>
@@ -36,9 +37,9 @@ class MetricsGraphRewritePass : public GraphOptimizationPass {
         Node* time_stamp_end_node = nullptr;
         for (Node* node : graph->nodes()) {
           if (node->type_string() == "TimeStamp") {
-            if (str_util::StrContains(node->name(), "begin")) {
+            if (absl::StrContains(node->name(), "begin")) {
               time_stamp_begin_node = node;
-            } else if (str_util::StrContains(node->name(), "end")) {
+            } else if (absl::StrContains(node->name(), "end")) {
               time_stamp_end_node = node;
             }
           }
@@ -51,11 +52,11 @@ class MetricsGraphRewritePass : public GraphOptimizationPass {
             } else if (e->dst() == time_stamp_begin_node) {
               // to avoid generate ring
             } else {
-              graph->AddControlEdge(time_stamp_begin_node, e->dst(), true);
-              graph->RemoveControlEdge(e);
+              graph->AddControlEdge(time_stamp_begin_node, e->dst());
+              graph->RemoveEdge(e);
             }
           }
-          graph->AddControlEdge(source, time_stamp_begin_node, true);
+          graph->AddControlEdge(source, time_stamp_begin_node);
 
           std::set<Node*> time_stamp_end_children = GetChildren(time_stamp_end_node);
 
@@ -66,11 +67,11 @@ class MetricsGraphRewritePass : public GraphOptimizationPass {
             } else if (time_stamp_end_children.find(e->src()) != time_stamp_end_children.end()) {
               // to avoid generate ring
             } else {
-              graph->AddControlEdge(e->src(), time_stamp_end_node, true);
-              graph->RemoveControlEdge(e);
+              graph->AddControlEdge(e->src(), time_stamp_end_node);
+              graph->RemoveEdge(e);
             }
           }
-          graph->AddControlEdge(time_stamp_end_node, sink, true);
+          graph->AddControlEdge(time_stamp_end_node, sink);
 
           VLogGraphDebugString(graph);
         }
