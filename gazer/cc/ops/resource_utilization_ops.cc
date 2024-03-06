@@ -39,6 +39,8 @@ namespace gazer {
 REGISTER_OP("ResourceUtilization")
   .Output("cpu_usage: float32")
   .Output("memory_usage_in_mb: float32")
+  // if not set stateful, this op will be optimize in constfold
+  .SetIsStateful()
   .SetShapeFn([](shape_inference::InferenceContext* c) {
     c->set_output(0, c->Scalar());
     c->set_output(1, c->Scalar());
