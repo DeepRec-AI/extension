@@ -47,12 +47,12 @@ class MetricsPass : public GraphOptimizationPass {
         }
         if (merge_summary_node) {
           Node* cpu_summary_node = nullptr;
-          TF_RETURN_IF_ERROR(CreateCPUSummaryToGraph("gazer/cpu", graph,
-                                                     &cpu_summary_node));
-
           Node* mem_summary_node = nullptr;
-          TF_RETURN_IF_ERROR(CreateMEMSummaryToGraph("gazer/mem", graph,
-                                                     &mem_summary_node));
+          TF_RETURN_IF_ERROR(CreateResUtilSummaryToGraph("gazer/cpu",
+                                                         "gazer/mem",
+                                                         graph,
+                                                         &cpu_summary_node,
+                                                         &mem_summary_node));
 
           std::vector<Node*> summary_nodes;
           summary_nodes.emplace_back(cpu_summary_node);
@@ -64,47 +64,45 @@ class MetricsPass : public GraphOptimizationPass {
           VLogGraphDebugString(graph);
         } else {
           // MergeSummary not found, do nothing
+          VLOG(1) << "MergeSummary not found, do nothing";
         }
       }
     }
     return Status::OK();
   }
  private:
-  Status CreateCPUSummaryToGraph(const std::string& tag, Graph* g, Node** node) {
-    Node* const_node = nullptr;
-    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
-      tag, g, &const_node));
-
+  Status CreateResUtilSummaryToGraph(const std::string& cpu_tag,
+                                     const std::string& mem_tag,
+                                     Graph* g,
+                                     Node** cpu_node,
+                                     Node** mem_node) {
     Node* metrics_node = nullptr;
     TF_RETURN_IF_ERROR(NodeBuilder("gazer/metrics", "ResourceUtilization")
       .Finalize(g, &metrics_node));
     VLOG(1) << "create resource_utilization_node: " << metrics_node->DebugString();
 
+    Node* cpu_const_node = nullptr;
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
+      cpu_tag, g, &cpu_const_node));
+
+    Node* mem_const_node = nullptr;
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
+      mem_tag, g, &mem_const_node));
+
     TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary", "ScalarSummary")
-      .Input(const_node, 0)
+      .Input(cpu_const_node, 0)
       .Input(metrics_node, 0)
       .Attr("T", DT_FLOAT)
-      .Finalize(g, node));
-    VLOG(1) << "create summary_node: " << (*node)->DebugString();
-    return Status::OK();
-  }
-
-  Status CreateMEMSummaryToGraph(const std::string& tag, Graph* g, Node** node) {
-    Node* const_node = nullptr;
-    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
-      tag, g, &const_node));
-
-    Node* metrics_node = nullptr;
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/metrics", "ResourceUtilization")
-      .Finalize(g, &metrics_node));
-    VLOG(1) << "create resource_utilization_node: " << metrics_node->DebugString();
+      .Finalize(g, cpu_node));
 
     TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary", "ScalarSummary")
-      .Input(const_node, 0)
+      .Input(mem_const_node, 0)
       .Input(metrics_node, 1)
       .Attr("T", DT_FLOAT)
-      .Finalize(g, node));
-    VLOG(1) << "create summary_node: " << (*node)->DebugString();
+      .Finalize(g, mem_node));
+
+    VLOG(1) << "create cpu_node: " << (*cpu_node)->DebugString();
+    VLOG(1) << "create mem_node: " << (*mem_node)->DebugString();
     return Status::OK();
   }
 
