@@ -82,12 +82,12 @@ class MetricsPass : public GraphOptimizationPass {
           // Read AIMASTER ENV
           std::string ai_master_addr;
           ReadStringFromEnvVar("AIMASTER_ADDR", "", &ai_master_addr);
-	  LOG(INFO) << "----------- " <<  ai_master_addr;
           if (ai_master_addr != "") {
             auto& client = ::gazer::ReportMetricsClient::GetInstance();
-     	    LOG(INFO) << "INITIALIZED gazer...";
+            LOG(INFO) << "INITIALIZED gazer... AIMASTER_ADDR: "
+                      << ai_master_addr;
             TF_RETURN_IF_ERROR(client.Initialize(ai_master_addr));
-	    TF_RETURN_IF_ERROR(client.ConnectToAM(job, task_id));
+            TF_RETURN_IF_ERROR(client.ConnectToAM(job, task_id));
             TF_RETURN_IF_ERROR(ExtendReportAIMasterNodeToGraph(
                 summary_nodes, job, task_id, merge_summary_node, graph));
           } else {

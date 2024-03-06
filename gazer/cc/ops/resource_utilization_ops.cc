@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
+#include <iostream>
+#include <fstream>
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/register_types.h"

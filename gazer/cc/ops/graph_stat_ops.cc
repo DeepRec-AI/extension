@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
+
+#include "tensorflow/core/framework/embedding/embedding_var.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -41,18 +43,17 @@ class ResourceStatOp: public OpKernel {
     ReadStringFromEnvVar(kGlobalResourceName, "", &names);
     std::vector<std::string> resource_names = str_util::Split(names, kItemSeparator);
 
-    // ResourceMgr* rm = ctx->resource_manager();
+    ResourceMgr* rm = ctx->resource_manager();
     int64 total_size = 0;
     for (const auto & resource_name : resource_names) {
       std::vector<std::string> item = str_util::Split(resource_name, kKVSeparator);
       if (item.size() == 2) {
         int64 var_size = std::stoi(item[1]);
         if (var_size == -1) {
-          // EmbeddingVar<int64, float>* r = nullptr;
-          // TF_CHECK_OK(rm->Lookup("", item[0], &r));
-          // // TODO add EV size.
-          // LOG(INFO) << "ev: " << r->DebugString();
-          // r->Unref();
+          EmbeddingVar<int64, float>* ev = nullptr;
+          TF_CHECK_OK(rm->Lookup(rm->default_container()/*container_name*/, item[0]/*shared_name*/, &ev));
+          total_size += ev->MemoryUsage();
+          ev->Unref();
         } else {
           total_size += var_size;
         }

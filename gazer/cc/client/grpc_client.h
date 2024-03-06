@@ -19,10 +19,6 @@ class ReportMetricsClient {
       return client;
     }
 
-    // ~ReportMetricsClient() {
-    //   thread_->join();
-    // }
-
     tensorflow::Status Initialize(const std::string& ai_master_addr);
     
     tensorflow::Status ConnectToAM(const std::string& job, int task_id);

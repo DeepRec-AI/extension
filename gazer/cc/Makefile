@@ -48,7 +48,7 @@ PROTOBUF_LIB := $(PROTOBUF_DIR)/build/lib
 PROTOC := $(PROTOBUF_DIR)/build/bin/protoc
 protobuf:
 	@echo "prepare protobuf library ..."
-	@if [ ! -d "${PROTOBUF_DIR}/build" ]; then cd "${PROTOBUF_DIR}"; CXX_CFLAGS="${GLIBCXX_USE_CXX11_ABI}" bash ./build.sh; fi
+	@if [ ! -d "${PROTOBUF_DIR}/build" ]; then cd "${PROTOBUF_DIR}"; bash ./build.sh; fi
 	@echo "protobuf done"
 
 # grpc
@@ -58,7 +58,7 @@ GRPC_LIB := $(GRPC_DIR)/build/lib
 PROTOC_GRPC_PLUGIN := $(GRPC_DIR)/build/bin/grpc_cpp_plugin
 grpc: protobuf
 	@echo "prepare grpc library ..."
-	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; CXX_CFLAGS=$(GLIBCXX_USE_CXX11_ABI) bash ./build.sh; fi
+	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; bash ./build.sh; fi
 	@echo "grpc done"
 
 PROTO_DIR := $(SRC_DIR)proto
