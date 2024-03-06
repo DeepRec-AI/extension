@@ -4,21 +4,17 @@ prefix=`pwd`/build
 
 CXXFLAGS="-fPIC -D_GLIBCXX_USE_CXX11_ABI=0"
 
-numeric_tf_version="$TF_VERSION"
+cd protobuf/
 
+numeric_tf_version="$TF_VERSION"
 if [ "$numeric_tf_version" -eq 112 ]; then
     echo "using protobuf 3.6.0"
-    cd protobuf/
     git checkout v3.6.0
 else
     echo "using protobuf 3.8.0"
-    cd protobuf/
     git checkout v3.8.0
-    
 fi
 
-cd protobuf/
-git submodule update --init --recursive
 ./autogen.sh
 ./configure --prefix=${prefix} --disable-shared CXXFLAGS="${CXXFLAGS}"
 make -j10
