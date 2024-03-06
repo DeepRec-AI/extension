@@ -54,9 +54,14 @@ class MetricsPass : public GraphOptimizationPass {
                                                          &cpu_summary_node,
                                                          &mem_summary_node));
 
+          Node* res_summary_node = nullptr;
+          TF_RETURN_IF_ERROR(CreateResSummaryToGraph("gazer/res_mem", graph,
+                                                     &res_summary_node));
+
           std::vector<Node*> summary_nodes;
           summary_nodes.emplace_back(cpu_summary_node);
           summary_nodes.emplace_back(mem_summary_node);
+          summary_nodes.emplace_back(res_summary_node);
 
           TF_RETURN_IF_ERROR(ExtendMergeSummaryNodeToGraph(summary_nodes,
                                                            merge_summary_node,
@@ -103,6 +108,25 @@ class MetricsPass : public GraphOptimizationPass {
 
     VLOG(1) << "create cpu_node: " << (*cpu_node)->DebugString();
     VLOG(1) << "create mem_node: " << (*mem_node)->DebugString();
+    return Status::OK();
+  }
+
+  Status CreateResSummaryToGraph(const std::string& tag, Graph* g, Node** node) {
+    Node* const_node = nullptr;
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
+      tag, g, &const_node));
+
+    Node* metrics_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/metrics_3", "ResourceStat")
+      .Finalize(g, &metrics_node));
+    VLOG(1) << "create resource_utilization_node: " << metrics_node->DebugString();
+
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary", "ScalarSummary")
+      .Input(const_node, 0)
+      .Input(metrics_node, 0)
+      .Attr("T", DT_FLOAT)
+      .Finalize(g, node));
+    VLOG(1) << "create summary_node: " << (*node)->DebugString();
     return Status::OK();
   }
 
