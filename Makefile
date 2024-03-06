@@ -27,8 +27,7 @@ CXX_CFLAGS := -std=c++11 \
 
 LDFLAGS := -shared \
 	-fstack-protector \
-	-fpic \
-	-L/usr/local
+	-fpic
 
 GAZER_LIB := $(LIBNAME)/lib$(LIBNAME).so
 -include $(LIBNAME)/cc/Makefile

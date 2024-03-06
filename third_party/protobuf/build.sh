@@ -4,7 +4,7 @@ prefix=`pwd`/build
 
 CXXFLAGS="-fPIC -D_GLIBCXX_USE_CXX11_ABI=0"
 
-cd protobuf/
+pushd protobuf
 
 numeric_tf_version="$TF_VERSION"
 if [ "$numeric_tf_version" -eq 112 ]; then
@@ -19,3 +19,4 @@ fi
 ./configure --prefix=${prefix} --disable-shared CXXFLAGS="${CXXFLAGS}"
 make -j10
 make install
+popd

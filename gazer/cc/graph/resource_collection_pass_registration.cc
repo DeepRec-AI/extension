@@ -114,14 +114,17 @@ class ResourceCollectionPass : public GraphOptimizationPass {
 	          std::string node_name = node->name();
             for (auto* o_node: node->out_nodes()) {
               if (o_node->type_string() == kEvInitOp) {
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
                 const Node* input_ev_0;
                 TF_RETURN_IF_ERROR(o_node->input_node(0, &input_ev_0));
                 const Node* input_ev_1;
                 TF_RETURN_IF_ERROR(o_node->input_node(1, &input_ev_1));
-                if (input_ev_0->name() == input_ev_1->name()) {
-                  if (resource_names_and_size_.end() == resource_names_and_size_.find(node_name)) {
-                    resource_names_and_size_.insert(std::pair<std::string, int64>(node_name, -1));
-                  }
+                if (input_ev_0->name() != input_ev_1->name()) {
+		  continue;
+		}
+#endif
+                if (resource_names_and_size_.end() == resource_names_and_size_.find(node_name)) {
+                  resource_names_and_size_.insert(std::pair<std::string, int64>(node_name, -1));
                 }
               }
             }

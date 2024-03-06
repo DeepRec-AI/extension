@@ -1,4 +1,4 @@
-SRC_DIR := gazer/cc/
+SRC_DIR := gazer/cc
 THIRD_PARTY_DIR := third_party
 GLIBCXX_USE_CXX11_ABI := 0
 
@@ -31,7 +31,7 @@ $(warning "LDFLAGS" $(TENSORFLOW_LDFLAGS))
 $(warning "GLIBCXX_USE_CXX11_ABI" $(GLIBCXX_USE_CXX11_ABI))
 
 CC_SOURCES := $(shell \
-        find $(SRC_DIR) -type f \
+        find $(SRC_DIR)/client $(SRC_DIR)/graph $(SRC_DIR)/ops $(SRC_DIR)/util -type f \
         \( -name "*.cc" ! -name "*.cu*" \) \
         -exec realpath {} --relative-to . \;)
 
@@ -64,15 +64,17 @@ grpc: protobuf
 	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; TF_VERSION=${TF_VERSION} bash ./build.sh; fi
 	@echo "grpc done"
 
-PROTO_DIR := $(SRC_DIR)proto
+PROTO_DIR := $(SRC_DIR)/proto
+PROTO_BUILT_DIR := $(PROTO_DIR)
+PROTO_OBJ := $(PROTO_BUILT_DIR)/scheduler.pb.o $(PROTO_BUILT_DIR)/scheduler.grpc.pb.o
 
 proto: grpc
 	mkdir -p $(dir $@)
 	@echo "generating pb file"
 	$(PROTOC) --cpp_out=./ gazer/cc/proto/scheduler.proto
 	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PLUGIN) gazer/cc/proto/scheduler.proto
-	$(CXX) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(PROTO_DIR)/scheduler.pb.cc -o $(PROTO_BUILT_DIR)/scheduler.pb.o
-	$(CXX) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(PROTO_DIR)/scheduler.grpc.pb.cc -o $(PROTO_BUILT_DIR)/scheduler.grpc.pb.o
+	$(CXX) $(GLIBCXX_USE_CXX11_ABI) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(PROTO_DIR)/scheduler.pb.cc -o $(PROTO_BUILT_DIR)/scheduler.pb.o
+	$(CXX) $(GLIBCXX_USE_CXX11_ABI) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(PROTO_DIR)/scheduler.grpc.pb.cc -o $(PROTO_BUILT_DIR)/scheduler.grpc.pb.o
 
 OBJS := $(CC_SOURCES:.cc=.o)
 DEPS := $(OBJS:.o=.d)
@@ -94,15 +96,13 @@ $(OBJS): %.o:%.cc protobuf grpc proto rapidjson
 	mkdir -p $(dir $@)
 	$(CXX) $(CFLAGS) $(CXX_CFLAGS) $(TENSORFLOW_CFLAGS)\
         -MP -MMD -MF $<.d -o $@ -c $< -fpic
-	sed -i '/site-packages/d' $<.d
-	sed -i '/^$$/N;/^\n$$/D' $<.d
 
 -include $(DEPS)
 
 $(GAZER_LIB): $(OBJS) 
 	mkdir -p $(dir $@)
 	$(CXX) $(CFLAGS) -std=c++11 -Wl,--version-script=gazer.script \
-        -o $@ $(OBJS) \
+        -o $@ $(OBJS) $(PROTO_OBJ) \
         $(TENSORFLOW_LDFLAGS) \
 		$(LDFLAGS)
 

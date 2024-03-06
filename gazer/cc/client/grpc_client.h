@@ -2,9 +2,7 @@
 
 #include "gazer/cc/proto/scheduler.grpc.pb.h"
 #include "gazer/cc/util/json.h"
-#include "tensorflow/core/framework/summary.pb.h"
 #include "tensorflow/core/lib/core/status.h"
-
 #include <memory>
 #include <thread>
 #include <grpcpp/grpcpp.h>
