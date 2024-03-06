@@ -7,13 +7,13 @@
 #include "tensorflow/core/public/version.h"
 #include "tensorflow/core/util/env_var.h"
 
-#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
-#include "tensorflow/core/framework/embedding/embedding_var.h"
-#elif (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1012L
-#include "tensorflow/core/framework/embedding_var.h"
-#else // version = 1.4.0
-#include "tensorflow/core/kernels/kv_variable_ops.h"
-#endif
+// #if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
+// #include "tensorflow/core/framework/embedding/embedding_var.h"
+// #elif (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1012L
+// #include "tensorflow/core/framework/embedding_var.h"
+// #else // version = 1.4.0
+// #include "tensorflow/core/kernels/kv_variable_ops.h"
+// #endif
 
 namespace tensorflow {
 namespace {
@@ -41,18 +41,18 @@ class ResourceStatOp: public OpKernel {
     ReadStringFromEnvVar(kGlobalResourceName, "", &names);
     std::vector<std::string> resource_names = str_util::Split(names, kItemSeparator);
 
-    ResourceMgr* rm = ctx->resource_manager();
+    // ResourceMgr* rm = ctx->resource_manager();
     int64 total_size = 0;
     for (const auto & resource_name : resource_names) {
       std::vector<std::string> item = str_util::Split(resource_name, kKVSeparator);
       if (item.size() == 2) {
         int64 var_size = std::stoi(item[1]);
         if (var_size == -1) {
-          EmbeddingVar<int64, float>* r = nullptr;
-          TF_CHECK_OK(rm->Lookup("", item[0], &r));
-          // TODO add EV size.
-          LOG(INFO) << "ev: " << r->DebugString();
-          r->Unref();
+          // EmbeddingVar<int64, float>* r = nullptr;
+          // TF_CHECK_OK(rm->Lookup("", item[0], &r));
+          // // TODO add EV size.
+          // LOG(INFO) << "ev: " << r->DebugString();
+          // r->Unref();
         } else {
           total_size += var_size;
         }

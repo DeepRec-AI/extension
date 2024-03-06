@@ -21,9 +21,7 @@ CXX_CFLAGS := -std=c++11 \
 LDFLAGS := -shared \
 	-fstack-protector \
 	-fpic \
-	-L/usr/local \
-	-lssl \
-	-lcrypto
+	-L/usr/local
 
 GAZER_LIB := $(LIBNAME)/lib$(LIBNAME).so
 -include $(LIBNAME)/cc/Makefile
@@ -47,7 +45,12 @@ test:
 clean:
 	@rm -fr dist/
 	@rm -fr build/
+	@rm -fr third_party/rapidjson/build
+	@rm -fr third_party/grpc/build
+	@rm -fr third_party/protobuf/build
+	@rm -fr third_party/googletest/build
 	@rm -fr *.egg-info/
+	@find ./gazer -name *.pb.* -exec rm -rf {} \;
 	@find -name *.o -exec rm -fr {} \;
 	@find -name *.d -exec rm -fr {} \;
 	@find -name *.so -exec rm -fr {} \;

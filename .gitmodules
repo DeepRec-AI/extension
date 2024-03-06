@@ -1,0 +1,9 @@
+[submodule "third_party/protobuf/protobuf"]
+	path = third_party/protobuf/protobuf
+	url = https://github.com/protocolbuffers/protobuf.git
+[submodule "third_party/grpc/grpc"]
+	path = third_party/grpc/grpc
+	url = https://github.com/grpc/grpc.git
+[submodule "third_party/rapidjson/rapidjson"]
+	path = third_party/rapidjson/rapidjson
+	url = https://github.com/Tencent/rapidjson.git
