@@ -154,8 +154,12 @@ def main(_):
     # ------init Envs------
     tr_files = glob.glob("%s/tr*csv" % FLAGS.data_dir)
     random.shuffle(tr_files)
+    # for test in PAI with data in OSS
+    tr_files = FLAGS.data_dir + "/train.csv"
     print("tr_files:", tr_files)
     va_files = glob.glob("%s/va*csv" % FLAGS.data_dir)
+    # for test in PAI with data in OSS
+    va_files = FLAGS.data_dir + "/eval.csv"
     print("va_files:", va_files)
     te_files = glob.glob("%s/te*csv" % FLAGS.data_dir)
     print("te_files:", te_files)
