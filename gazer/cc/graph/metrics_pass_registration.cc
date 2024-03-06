@@ -6,8 +6,6 @@
 #include <tensorflow/core/graph/node_builder.h>
 #include <tensorflow/core/util/device_name_utils.h>
 
-#include <tensorflow/core/util/events_writer.h>
-
 namespace tensorflow {
 namespace gazer {
 namespace {
@@ -67,10 +65,17 @@ class MetricsPass : public GraphOptimizationPass {
                                                        assigned_device_index,
                                                        node_name_suffix,
                                                        &res_summary_node));
+            Node* graph_summary_node = nullptr;
+            TF_RETURN_IF_ERROR(CreateGraphSummaryToGraph("gazer/graph_duration" + node_name_suffix,
+                                                         graph,
+                                                         assigned_device_index,
+                                                         node_name_suffix,
+                                                         &graph_summary_node));
 
             summary_nodes.emplace_back(cpu_summary_node);
             summary_nodes.emplace_back(mem_summary_node);
             summary_nodes.emplace_back(res_summary_node);
+            summary_nodes.emplace_back(graph_summary_node);
           }
 
           TF_RETURN_IF_ERROR(ExtendMergeSummaryNodeToGraph(summary_nodes,
@@ -129,6 +134,44 @@ class MetricsPass : public GraphOptimizationPass {
     return Status::OK();
   }
 
+  Status CreateGraphSummaryToGraph(const std::string& tag,
+                                   Graph* g,
+                                   int assigned_device_index,
+                                   const std::string& name_suffix,
+                                   Node** node) {
+    Node* time_stamp_begin = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/graph_stat/begin" + name_suffix,
+                                   "TimeStamp")
+      .Finalize(g, &time_stamp_begin));
+    time_stamp_begin->set_assigned_device_name_index(assigned_device_index);
+
+    Node* time_stamp_end = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/graph_stat/end" + name_suffix,
+                                   "TimeStamp")
+      .Finalize(g, &time_stamp_end));
+    time_stamp_end->set_assigned_device_name_index(assigned_device_index);
+
+    Node* const_node = nullptr;
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/graph/const" + name_suffix,
+      tag, g, assigned_device_index, &const_node));
+
+    Node* duartion_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/graph_stat/duration" + name_suffix,
+                                   "Sub")
+      .Input(time_stamp_end, 0)
+      .Input(time_stamp_begin, 0)
+      .Finalize(g, &duartion_node));
+    duartion_node->set_assigned_device_name_index(assigned_device_index);
+
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/graph_summary" + name_suffix,
+                                   "ScalarSummary")
+      .Input(const_node, 0)
+      .Input(duartion_node, 0)
+      .Finalize(g, node));
+    (*node)->set_assigned_device_name_index(assigned_device_index);
+    return Status::OK();
+  }
+
   Status CreateResSummaryToGraph(const std::string& tag,
                                  Graph* g,
                                  int assigned_device_index,
@@ -145,7 +188,7 @@ class MetricsPass : public GraphOptimizationPass {
     metrics_node->set_assigned_device_name_index(assigned_device_index);
     VLOG(1) << "create resource_utilization_node: " << metrics_node->DebugString();
 
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary" + name_suffix,
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/res_summary" + name_suffix,
                                    "ScalarSummary")
       .Input(const_node, 0)
       .Input(metrics_node, 0)
@@ -214,7 +257,7 @@ class MetricsPass : public GraphOptimizationPass {
   }
 };
 
-REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PLACEMENT, 0,
+REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_REWRITE_FOR_EXEC, 0,
                       MetricsPass);
 
 }  // namespace gazer

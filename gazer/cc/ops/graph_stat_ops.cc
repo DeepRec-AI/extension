@@ -62,5 +62,28 @@ class ResourceStatOp: public OpKernel {
 REGISTER_KERNEL_BUILDER(Name("ResourceStat").Device(DEVICE_CPU),
                         ResourceStatOp);
 
+REGISTER_OP("TimeStamp")
+  .Output("time_stamp: int64")
+  .SetIsStateful()
+  .SetShapeFn([](shape_inference::InferenceContext* c) {
+    c->set_output(0, c->Scalar());
+    return Status::OK();
+  });
+
+class TimeStampOp: public OpKernel {
+ public:
+  TimeStampOp(OpKernelConstruction* ctx)
+: OpKernel(ctx) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    Tensor* time_stamp = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {}, &time_stamp));
+    time_stamp->scalar<int64>()() = EnvTime::Default()->NowMicros();
+  }
+};
+
+REGISTER_KERNEL_BUILDER(Name("TimeStamp").Device(DEVICE_CPU),
+                        TimeStampOp);
+
 } // namespace gazer
 } // namespace tensorflow
