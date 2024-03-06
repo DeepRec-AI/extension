@@ -1,11 +1,17 @@
 #include <stdio.h>
 #include <unistd.h>
-#include "tensorflow/core/framework/embedding/embedding_var.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/shape_inference.h"
+#include "tensorflow/core/public/version.h"
 #include "tensorflow/core/util/env_var.h"
+
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
+#include "tensorflow/core/framework/embedding/embedding_var.h"
+#else
+#include "tensorflow/core/framework/embedding_var.h"
+#endif
 
 namespace tensorflow {
 namespace {
