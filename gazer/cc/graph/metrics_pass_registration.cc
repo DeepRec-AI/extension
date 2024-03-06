@@ -26,17 +26,16 @@ class MetricsPass : public GraphOptimizationPass {
       Graph* graph = options.graph->get();
       if (graph) {
         VLogGraphDebugString(graph);
-      }
-    }
-    if (options.partition_graphs) {
-      for (auto& pg : *options.partition_graphs) {
-        Graph* graph = pg.second.get();
-        if (graph == nullptr) {
-          return errors::Internal(
-              "MetricsPass should be optimized after partition graph,"
-              " but partition graph is unavailable.");
+        std::vector<Device*> all_devices;
+        for (auto & d : options.device_set->devices()) {
+          VLOG(1) << "device: " << d->DebugString();
+          VLOG(1) << "device name: " << d->name();
+          // filter CPU device, remove GPU, XLA_CPU ... device
+          if (d->device_type() == "CPU") {
+            all_devices.emplace_back(d);
+          }
         }
-        VLogGraphDebugString(graph);
+        CHECK(all_devices.size() > 0);
 
         Node* merge_summary_node = nullptr;
         for (Node* node : graph->op_nodes()) {
@@ -46,22 +45,33 @@ class MetricsPass : public GraphOptimizationPass {
           }
         }
         if (merge_summary_node) {
-          Node* cpu_summary_node = nullptr;
-          Node* mem_summary_node = nullptr;
-          TF_RETURN_IF_ERROR(CreateResUtilSummaryToGraph("gazer/cpu",
-                                                         "gazer/mem",
-                                                         graph,
-                                                         &cpu_summary_node,
-                                                         &mem_summary_node));
-
-          Node* res_summary_node = nullptr;
-          TF_RETURN_IF_ERROR(CreateResSummaryToGraph("gazer/res_mem", graph,
-                                                     &res_summary_node));
-
           std::vector<Node*> summary_nodes;
-          summary_nodes.emplace_back(cpu_summary_node);
-          summary_nodes.emplace_back(mem_summary_node);
-          summary_nodes.emplace_back(res_summary_node);
+          for (auto &d: all_devices) {
+            int assigned_device_index = graph->InternDeviceName(d->name());
+            // std::string job = d->parsed_name().job;
+            // int task = d->parsed_name().task;
+            std::string node_name_suffix = str_util::StringReplace(d->name(), ":", "_", true);
+            Node* cpu_summary_node = nullptr;
+            Node* mem_summary_node = nullptr;
+            TF_RETURN_IF_ERROR(CreateResUtilSummaryToGraph("gazer/cpu" + node_name_suffix,
+                                                           "gazer/mem" + node_name_suffix,
+                                                           graph,
+                                                           assigned_device_index,
+                                                           node_name_suffix,
+                                                           &cpu_summary_node,
+                                                           &mem_summary_node));
+
+            Node* res_summary_node = nullptr;
+            TF_RETURN_IF_ERROR(CreateResSummaryToGraph("gazer/res_mem" + node_name_suffix,
+                                                       graph,
+                                                       assigned_device_index,
+                                                       node_name_suffix,
+                                                       &res_summary_node));
+
+            summary_nodes.emplace_back(cpu_summary_node);
+            summary_nodes.emplace_back(mem_summary_node);
+            summary_nodes.emplace_back(res_summary_node);
+          }
 
           TF_RETURN_IF_ERROR(ExtendMergeSummaryNodeToGraph(summary_nodes,
                                                            merge_summary_node,
@@ -79,61 +89,78 @@ class MetricsPass : public GraphOptimizationPass {
   Status CreateResUtilSummaryToGraph(const std::string& cpu_tag,
                                      const std::string& mem_tag,
                                      Graph* g,
+                                     int assigned_device_index,
+                                     const std::string& name_suffix,
                                      Node** cpu_node,
                                      Node** mem_node) {
     Node* metrics_node = nullptr;
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/metrics", "ResourceUtilization")
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/resource_utilization" + name_suffix,
+                                   "ResourceUtilization")
       .Finalize(g, &metrics_node));
+    metrics_node->set_assigned_device_name_index(assigned_device_index);
     VLOG(1) << "create resource_utilization_node: " << metrics_node->DebugString();
 
     Node* cpu_const_node = nullptr;
-    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
-      cpu_tag, g, &cpu_const_node));
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const" + name_suffix + "/0",
+      cpu_tag, g, assigned_device_index, &cpu_const_node));
 
     Node* mem_const_node = nullptr;
-    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
-      mem_tag, g, &mem_const_node));
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const" + name_suffix + "/1",
+      mem_tag, g, assigned_device_index, &mem_const_node));
 
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary", "ScalarSummary")
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary" + name_suffix + "/0",
+                                   "ScalarSummary")
       .Input(cpu_const_node, 0)
       .Input(metrics_node, 0)
       .Attr("T", DT_FLOAT)
       .Finalize(g, cpu_node));
+    (*cpu_node)->set_assigned_device_name_index(assigned_device_index);
 
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary", "ScalarSummary")
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary" + name_suffix + "/1",
+                                   "ScalarSummary")
       .Input(mem_const_node, 0)
       .Input(metrics_node, 1)
       .Attr("T", DT_FLOAT)
       .Finalize(g, mem_node));
+    (*mem_node)->set_assigned_device_name_index(assigned_device_index);
 
     VLOG(1) << "create cpu_node: " << (*cpu_node)->DebugString();
     VLOG(1) << "create mem_node: " << (*mem_node)->DebugString();
     return Status::OK();
   }
 
-  Status CreateResSummaryToGraph(const std::string& tag, Graph* g, Node** node) {
+  Status CreateResSummaryToGraph(const std::string& tag,
+                                 Graph* g,
+                                 int assigned_device_index,
+                                 const std::string& name_suffix,
+                                 Node** node) {
     Node* const_node = nullptr;
-    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const_1",
-      tag, g, &const_node));
+    TF_RETURN_IF_ERROR(CreateScalarStringConstToGraph("gazer/const" + name_suffix,
+      tag, g, assigned_device_index, &const_node));
 
     Node* metrics_node = nullptr;
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/metrics_3", "ResourceStat")
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/resource_stat" + name_suffix,
+                                   "ResourceStat")
       .Finalize(g, &metrics_node));
+    metrics_node->set_assigned_device_name_index(assigned_device_index);
     VLOG(1) << "create resource_utilization_node: " << metrics_node->DebugString();
 
-    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary", "ScalarSummary")
+    TF_RETURN_IF_ERROR(NodeBuilder("gazer/summary" + name_suffix,
+                                   "ScalarSummary")
       .Input(const_node, 0)
       .Input(metrics_node, 0)
       .Attr("T", DT_FLOAT)
       .Finalize(g, node));
+    (*node)->set_assigned_device_name_index(assigned_device_index);
     VLOG(1) << "create summary_node: " << (*node)->DebugString();
     return Status::OK();
   }
 
   Status CreateScalarStringConstToGraph(const std::string& node_name,
-                                       const std::string& string_content,
-                                       Graph* g,
-                                       Node** const_node) {
+                                        const std::string& string_content,
+                                        Graph* g,
+                                        int assigned_device_index,
+                                        Node** const_node) {
     Tensor const_tensor(DT_STRING, TensorShape({}));
     const_tensor.scalar<std::string>()() = string_content;
     Node* node;
@@ -141,6 +168,7 @@ class MetricsPass : public GraphOptimizationPass {
                          .Attr("dtype", DT_STRING)
                          .Attr("value", const_tensor)
                          .Finalize(g, &node));
+    node->set_assigned_device_name_index(assigned_device_index);
     VLOG(1) << "create const_node: " << node->DebugString();
     *const_node = node;
     return Status::OK();
@@ -186,7 +214,7 @@ class MetricsPass : public GraphOptimizationPass {
   }
 };
 
-REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PARTITIONING, 0,
+REGISTER_OPTIMIZATION(OptimizationPassRegistry::POST_PLACEMENT, 0,
                       MetricsPass);
 
 }  // namespace gazer
