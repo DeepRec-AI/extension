@@ -3,7 +3,14 @@ OS ?= $(shell uname -s)
 
 
 CXX ?= gcc
-PYTHON ?= python
+
+ifeq ($(PYTHON_VERSION), 2)
+$(warning using python version 2)
+PYTHON ?= python2
+else
+$(warning default using python version 3)
+PYTHON ?= python3
+endif
 
 CFLAGS := -O3 -g \
 	-DNDEBUG \

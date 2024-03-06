@@ -46,7 +46,7 @@ class ReportAIMasterOp : public OpKernel {
     ::gazer::JsonWriter json_writer;
     for (int i = 0; i < num_summary_inputs; ++i) {
       const Tensor& tensor_in = ctx->input(i);
-      auto s_vec_in = tensor_in.flat<tstring>();
+      auto s_vec_in = tensor_in.flat<string>();
       for (int d = 0; d < s_vec_in.dimension(0); ++d) {
         const string& s_in = s_vec_in(d);
         Summary summary_in;

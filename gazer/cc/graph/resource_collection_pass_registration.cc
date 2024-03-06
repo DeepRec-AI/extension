@@ -8,13 +8,23 @@
 #include <tensorflow/core/framework/tensor.pb.h>
 #include <tensorflow/core/graph/node_builder.h>
 #include <tensorflow/core/util/device_name_utils.h>
+#include "tensorflow/core/public/version.h"
 
 namespace tensorflow {
+
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
+constexpr char kEvInitOp[] = "InitializeKvVariableV2Op";
+#else
+constexpr char kEvInitOp[] = "InitializeKvVariableOp";
+#endif
+
+constexpr char kEvHandleOp[] = "KvVarHandleOp";
+
 namespace gazer {
 namespace {
-const char* kItemSeparator = "@";
-const char* kKVSeparator = ":";
-const char* kGlobalResourceName = "GLOBAL_RESOURCE_NAME";
+constexpr char kItemSeparator[] = "@";
+constexpr char kKVSeparator[] = ":";
+constexpr char kGlobalResourceName[] = "GLOBAL_RESOURCE_NAME";
 void VLogGraphDebugString(Graph* g) {
   GraphDef graph_def;
   g->ToGraphDef(&graph_def);
@@ -103,7 +113,7 @@ class ResourceCollectionPass : public GraphOptimizationPass {
           } else if (node->type_string() == "KvVarHandleOp") {
 	          std::string node_name = node->name();
             for (auto* o_node: node->out_nodes()) {
-              if (o_node->type_string() == "InitializeKvVariableV2Op") {
+              if (o_node->type_string() == kEvInitOp) {
                 const Node* input_ev_0;
                 TF_RETURN_IF_ERROR(o_node->input_node(0, &input_ev_0));
                 const Node* input_ev_1;

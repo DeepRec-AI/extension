@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include "tensorflow/core/framework/embedding/embedding_var.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -9,19 +8,17 @@
 #include "tensorflow/core/public/version.h"
 #include "tensorflow/core/util/env_var.h"
 
-// #if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
-// #include "tensorflow/core/framework/embedding/embedding_var.h"
-// #elif (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1012L
-// #include "tensorflow/core/framework/embedding_var.h"
-// #else // version = 1.4.0
-// #include "tensorflow/core/kernels/kv_variable_ops.h"
-// #endif
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
+#include "tensorflow/core/framework/embedding/embedding_var.h"
+#else
+#include "tensorflow/core/framework/embedding_var.h"
+#endif
 
 namespace tensorflow {
 namespace {
-const char* kItemSeparator = "@";
-const char* kKVSeparator = ":";
-const char* kGlobalResourceName = "GLOBAL_RESOURCE_NAME";
+constexpr char kItemSeparator[] = "@";
+constexpr char kKVSeparator[] = ":";
+constexpr char kGlobalResourceName[] = "GLOBAL_RESOURCE_NAME";
 } // namespace
 namespace gazer {
 
@@ -52,7 +49,11 @@ class ResourceStatOp: public OpKernel {
         if (var_size == -1) {
           EmbeddingVar<int64, float>* ev = nullptr;
           TF_CHECK_OK(rm->Lookup(rm->default_container()/*container_name*/, item[0]/*shared_name*/, &ev));
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) >= 1015L
           total_size += ev->MemoryUsage();
+#else
+          total_size += ev->hashmap()->MemoryUsage();
+#endif
           ev->Unref();
         } else {
           total_size += var_size;

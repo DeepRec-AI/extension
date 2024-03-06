@@ -49,7 +49,7 @@ class MetricsPass : public GraphOptimizationPass {
         }
         if (merge_summary_node) {
           std::vector<Node*> summary_nodes;
-          int task_id;
+          int task_id = 0;
           std::string job;
           for (auto& d : all_devices) {
             int assigned_device_index = graph->InternDeviceName(d->name());

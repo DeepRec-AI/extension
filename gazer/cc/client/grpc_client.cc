@@ -104,7 +104,6 @@ void ReportMetricsClient::AsyncCompleteResponse() {
   // tells us whether there is any kind of event or the cq_ is shutting down.
   while (cq_.Next(&got_tag, &ok)) {
     AsyncClientCall* call = static_cast<AsyncClientCall*>(got_tag);
-    GPR_ASSERT(ok);
     if (call->status.ok()) {
       VLOG(1) << "RPC OK.";
     } else {

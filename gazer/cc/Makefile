@@ -3,9 +3,14 @@ THIRD_PARTY_DIR := third_party
 GLIBCXX_USE_CXX11_ABI := 0
 
 TENSORFLOW_VERSION := $(shell \
-	    LD_LIBRARY_PATH=/usr/local/gcc-5.3.0/lib64:/usr/local/lib64/ $(PYTHON) -c \
+	    LD_LIBRARY_PATH=/usr/local/gcc-5.3.0/lib64 $(PYTHON) -c \
 	    "import tensorflow as tf; print(tf.__version__)" 2>/dev/null)
 
+ifeq ($(TENSORFLOW_VERSION), 1.12.2-PAI2209u1)
+TF_VERSION ?= 112
+else
+TF_VERSION ?= 115
+endif
 TENSORFLOW_CFLAGS := $(shell \
         $(PYTHON) -c \
         "import tensorflow as tf; cflags=tf.sysconfig.get_compile_flags(); print(' '.join([c.replace('-I', '-isystem ', 1) + ' ' + c.replace('-I', '-isystem ', 1) + '/external/sparsehash_c11' + ' ' + c.replace('-I', '-isystem ', 1) + '/external/com_github_google_leveldb/include/' + ' ' + c.replace('-I', '-isystem ', 1) + '/external/libcuckoo/' if c.startswith('-I') else c for c in cflags]))" 2>/dev/null)
@@ -19,8 +24,6 @@ TENSORFLOW_LDFLAGS := \
         $(shell \
         $(PYTHON) -c \
         "import tensorflow as tf; ldflags=tf.sysconfig.get_link_flags(); print(' '.join(ldflags))" 2>/dev/null)
-
-#sysconfig.get_compile_flags
 
 $(warning "Tensorflow Version" $(TENSORFLOW_VERSION))
 $(warning "CFLAGS" $(TENSORFLOW_CFLAGS))
@@ -48,7 +51,7 @@ PROTOBUF_LIB := $(PROTOBUF_DIR)/build/lib
 PROTOC := $(PROTOBUF_DIR)/build/bin/protoc
 protobuf:
 	@echo "prepare protobuf library ..."
-	@if [ ! -d "${PROTOBUF_DIR}/build" ]; then cd "${PROTOBUF_DIR}"; bash ./build.sh; fi
+	@if [ ! -d "${PROTOBUF_DIR}/build" ]; then cd "${PROTOBUF_DIR}"; TF_VERSION=${TF_VERSION} bash ./build.sh; fi
 	@echo "protobuf done"
 
 # grpc
@@ -58,10 +61,11 @@ GRPC_LIB := $(GRPC_DIR)/build/lib
 PROTOC_GRPC_PLUGIN := $(GRPC_DIR)/build/bin/grpc_cpp_plugin
 grpc: protobuf
 	@echo "prepare grpc library ..."
-	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; bash ./build.sh; fi
+	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; TF_VERSION=${TF_VERSION} bash ./build.sh; fi
 	@echo "grpc done"
 
 PROTO_DIR := $(SRC_DIR)proto
+
 proto: grpc
 	mkdir -p $(dir $@)
 	@echo "generating pb file"
@@ -88,7 +92,7 @@ LDFLAGS += -lcares
 
 $(OBJS): %.o:%.cc protobuf grpc proto rapidjson
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) $(TENSORFLOW_CFLAGS) $(CXX_CFLAGS) \
+	$(CXX) $(CFLAGS) $(CXX_CFLAGS) $(TENSORFLOW_CFLAGS)\
         -MP -MMD -MF $<.d -o $@ -c $< -fpic
 	sed -i '/site-packages/d' $<.d
 	sed -i '/^$$/N;/^\n$$/D' $<.d
