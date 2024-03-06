@@ -1,0 +1,8 @@
+*.pyc
+*.so
+*.so.*
+*.o
+*.d
+build/
+dist/
+*.egg-info/
