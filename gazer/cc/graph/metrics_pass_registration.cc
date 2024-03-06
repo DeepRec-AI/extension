@@ -3,6 +3,7 @@
 #include <tensorflow/core/framework/register_types.h>
 #include <tensorflow/core/framework/shape_inference.h>
 #include <tensorflow/core/framework/tensor.pb.h>
+#include <tensorflow/core/graph/algorithm.h>
 #include <tensorflow/core/graph/node_builder.h>
 #include <tensorflow/core/util/device_name_utils.h>
 
@@ -253,6 +254,7 @@ class MetricsPass : public GraphOptimizationPass {
       }
     }
     g->RemoveNode(merge_summary_node);
+    FixupSourceAndSinkEdges(g);
     return Status::OK();
   }
 };
