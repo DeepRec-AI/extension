@@ -3,6 +3,8 @@
 *.so.*
 *.o
 *.d
+*.pb.h
+*.pb.cc
 build/
 dist/
 *.egg-info/

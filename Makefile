@@ -1,7 +1,3 @@
-LIBNAME := gazer
-OS ?= $(shell uname -s)
-
-
 CXX ?= gcc
 
 ifeq ($(PYTHON_VERSION), 2)
@@ -14,7 +10,7 @@ endif
 
 CFLAGS := -O3 -g \
 	-DNDEBUG \
-	-I$(LIBNAME)/include \
+	-Iinclude \
 	-I.
 
 CXX_CFLAGS := -std=c++11 \
@@ -29,36 +25,29 @@ LDFLAGS := -shared \
 	-fstack-protector \
 	-fpic
 
-GAZER_LIB := $(LIBNAME)/lib$(LIBNAME).so
--include $(LIBNAME)/cc/Makefile
 
-.PHONY: build
-build: $(GAZER_LIB)
+GAZER_LIB := gazer/libgazer.so
+include gazer/cc/Makefile
+
+.PHONY: gazer
+gazer: $(GAZER_LIB)
 	@echo -e "\033[1;33m[BUILD] $$t \033[0m" \
         "build wheel package"
-	$(PYTHON) setup.py bdist_wheel
-	@ls dist/*.whl
-
-.PHONY: test
-test:
-	for t in $(TESTS); do \
-		@echo -e "\033[1;33m[TEST] $$t \033[0m" ; \
-		$(PYTHON) $$t || exit 1; \
-		echo ; \
-	done
+	cd gazer/; $(PYTHON) setup.py bdist_wheel
+	@ls gazer/dist/*.whl
 
 .PHONY: clean
 clean:
-	@rm -fr dist/
-	@rm -fr build/
-	@rm -fr third_party/rapidjson/build
-	@rm -fr third_party/grpc/build
-	@rm -fr third_party/protobuf/build
-	@rm -fr third_party/googletest/build
-	@rm -fr *.egg-info/
-	@find ./gazer -name *.pb.* -exec rm -rf {} \;
+	@rm -fr gazer/dist/
+	@rm -fr gazer/build/
+	@rm -fr gazer/third_party/rapidjson/build
+	@rm -fr gazer/third_party/grpc/build
+	@rm -fr gazer/third_party/protobuf/build
+	@rm -fr gazer/*.egg-info/
+	@echo "remove .o/.d/.so/.pb*"
+	@find ./ -name *.pb.* -exec rm -rf {} \;
 	@find -name *.o -exec rm -fr {} \;
 	@find -name *.d -exec rm -fr {} \;
 	@find -name *.so -exec rm -fr {} \;
 
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := gazer

@@ -1,5 +1,5 @@
 SRC_DIR := gazer/cc
-THIRD_PARTY_DIR := third_party
+THIRD_PARTY_DIR := gazer/third_party
 GLIBCXX_USE_CXX11_ABI := 0
 
 TENSORFLOW_VERSION := $(shell \
@@ -101,7 +101,7 @@ $(OBJS): %.o:%.cc protobuf grpc proto rapidjson
 
 $(GAZER_LIB): $(OBJS) 
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) -std=c++11 -Wl,--version-script=gazer.script \
+	$(CXX) $(CFLAGS) -std=c++11 -Wl,--version-script=gazer/gazer.script \
         -o $@ $(OBJS) $(PROTO_OBJ) \
         $(TENSORFLOW_LDFLAGS) \
 		$(LDFLAGS)
