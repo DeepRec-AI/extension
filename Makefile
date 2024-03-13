@@ -40,10 +40,10 @@ gazer: $(GAZER_LIB)
 clean:
 	@rm -fr gazer/dist/
 	@rm -fr gazer/build/
-	@rm -fr gazer/third_party/rapidjson/build
-	@rm -fr gazer/third_party/grpc/build
-	@rm -fr gazer/third_party/protobuf/build
 	@rm -fr gazer/*.egg-info/
+	@rm -fr third_party/rapidjson/build
+	@rm -fr third_party/grpc/build
+	@rm -fr third_party/protobuf/build
 	@echo "remove .o/.d/.so/.pb*"
 	@find ./ -name *.pb.* -exec rm -rf {} \;
 	@find -name *.o -exec rm -fr {} \;

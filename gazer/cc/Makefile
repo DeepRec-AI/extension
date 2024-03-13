@@ -1,5 +1,5 @@
 SRC_DIR := gazer/cc
-THIRD_PARTY_DIR := gazer/third_party
+THIRD_PARTY_DIR := third_party
 GLIBCXX_USE_CXX11_ABI := 0
 
 TENSORFLOW_VERSION := $(shell \
