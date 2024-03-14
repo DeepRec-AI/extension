@@ -33,11 +33,16 @@ typedef Eigen::ThreadPoolDevice CPUDevice;
 
 namespace des {
 
+namespace {
+const size_t kBufferSize = 8 << 20;
+}
+
 template <typename TKey, typename TValue>
 class KvResourceFilterOp : public OpKernel {
  public:
   explicit KvResourceFilterOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("partition_id", &partition_id_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("partition_nums", &partition_nums_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -48,44 +53,49 @@ class KvResourceFilterOp : public OpKernel {
     const Tensor& partition_num_tensor = ctx->input(1);
     int partition_num = partition_num_tensor.flat<int>()(0);
 
-    std::vector<TKey> filtered_keys;
-    std::vector<void*> value_ptr_list;
+    std::vector<std::vector<TKey>> filtered_keys;
+    std::vector<std::vector<void*>> value_ptr_list;
+    filtered_keys.resize(partition_nums_);
+    value_ptr_list.resize(partition_nums_);
     int64 before_size = embedding_var->Size();
     OP_REQUIRES_OK(
-        ctx, embedding_var->GetShardedSnapshot(&filtered_keys, &value_ptr_list,
+        ctx, embedding_var->GetShardedSnapshot(filtered_keys, value_ptr_list,
                                                partition_id_, partition_num));
-    Tensor* unneeded_ids_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, {filtered_keys.size()},
-                                             &unneeded_ids_tensor));
-    Tensor* unneeded_value_tensor = nullptr;
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_output(
-                       1, {filtered_keys.size(), embedding_var->ValueLen()},
-                       &unneeded_value_tensor));
-    Tensor* version_tensor = nullptr;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_output(2, {filtered_keys.size()}, &version_tensor));
-    Tensor* freq_tensor = nullptr;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_output(3, {filtered_keys.size()}, &freq_tensor));
-    if (filtered_keys.size() == 0) {
-      return;
+    for (int i = 0; i < partition_nums_; ++i) {
+      Tensor* unneeded_ids_tensor = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(i, {filtered_keys[i].size()},
+                                               &unneeded_ids_tensor));
+      Tensor* unneeded_value_tensor = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(partition_nums_ + i,
+                                               {filtered_keys[i].size(),
+                                                embedding_var->ValueLen()},
+                                               &unneeded_value_tensor));
+      Tensor* version_tensor = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(2 * partition_nums_ + i,
+                                               {filtered_keys[i].size()},
+                                               &version_tensor));
+      Tensor* freq_tensor = nullptr;
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_output(3 * partition_nums_ + i,
+                                    {filtered_keys[i].size()}, &freq_tensor));
+      if (filtered_keys[i].size() == 0) {
+        continue;
+      }
+      auto unneeded_ids = unneeded_ids_tensor->flat<TKey>().data();
+      auto unneeded_value = unneeded_value_tensor->flat<TValue>().data();
+      auto versions = version_tensor->flat<int64>().data();
+      auto freq = freq_tensor->flat<int64>().data();
+      embedding_var->ExportAndRemove(unneeded_ids, unneeded_value, versions,
+                                     freq, filtered_keys[i], value_ptr_list[i]);
     }
-    auto unneeded_ids = unneeded_ids_tensor->flat<TKey>().data();
-    auto unneeded_value = unneeded_value_tensor->flat<TValue>().data();
-    auto versions = version_tensor->flat<int64>().data();
-    auto freq = freq_tensor->flat<int64>().data();
-    embedding_var->ExportAndRemove(unneeded_ids, unneeded_value, versions, freq,
-                                   filtered_keys, value_ptr_list);
     int64 after_size = embedding_var->Size();
     VLOG(1) << " KvResourceFilterOp: " << embedding_var->Name()
-            << " before_size " << before_size << " after_size " << after_size
-            << " filtered_keys size: " << filtered_keys.size()
-            << " partition_num: " << partition_num;
+            << " before_size " << before_size << " after_size " << after_size;
   }
 
  private:
   int partition_id_;
+  int partition_nums_;
 };
 
 #define REGISTER_CPU_KERNELS(key_type, value_type)                  \
@@ -135,6 +145,15 @@ class KvResourceMulImportOp : public OpKernel {
         OP_REQUIRES_OK(ctx, embedding_var->RestoreFromKeysAndValues(
                                 N, partition_id_, partition_num, import_ids,
                                 import_values, import_versions, import_freqs));
+
+        while (N > 0) {
+          int64 read_num = std::min(N, (int64)kBufferSize);
+          OP_REQUIRES_OK(ctx,
+                         embedding_var->RestoreFromKeysAndValues(
+                             read_num, partition_id_, partition_num, import_ids,
+                             import_values, import_versions, import_freqs));
+          N -= read_num;
+        }
       }
       int64 after_size = embedding_var->Size();
       VLOG(1) << " KvResourceMulImport: " << embedding_var->Name()
@@ -442,6 +461,9 @@ TF_CALL_int64(REGISTER_GPU_KERNELS);
 TF_CALL_int8(REGISTER_GPU_KERNELS);
 #undef REGISTER_GPU_KERNELS
 #endif  // GOOGLE_CUDA
+
+template <typename T>
+class ReleaseResource : public OpKernel {};
 
 }  // end namespace des
 }  // end namespace tensorflow

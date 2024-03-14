@@ -44,6 +44,7 @@ import grpc
 ELASTIC_SUBGRAPH_INIT = "elastic_subgraph_init"
 ELASTIC_SUBGRAPH_IMPORT = "elastic_subgraph_import"
 ELASTIC_IMPORT_SCOPE = "elastic_import"
+ELASTIC_SUBGRAPH_DESTROY = "elastic_subgraph_destroy"
 AIMASTER_ADDR = "AIMASTER_ADDR"
 
 def create(self):
@@ -65,13 +66,16 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
     ```
 
   """
-  def __init__(self, check_scale_secs=None, check_scale_steps=1000):
+  def __init__(self, check_scale_secs=None, check_scale_steps=None):
     self._task_type = json.loads(os.environ.get('TF_CONFIG', ""))["task"]["type"]
     self._aimaster_addr = os.environ.get(AIMASTER_ADDR, "")
     self._base_cpu_device = tf_device.DeviceSpec.from_string("/job:ps/task:0/device:CPU:0")
     self._base_gpu_device = tf_device.DeviceSpec.from_string("/job:ps/task:0/device:GPU:0")
+    if check_scale_secs is None and check_scale_steps is None:
+      check_scale_steps = 1000
     self._timer = SecondOrStepTimer(
         every_secs=check_scale_secs, every_steps=check_scale_steps)
+    self._channel = grpc.insecure_channel(self._aimaster_addr)
 
   def after_create_session(self, session, coord):
     session.create = types.MethodType(create, session)
@@ -84,11 +88,14 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
       raise RuntimeError(
           "Global step should be created to use ElasticTrainingHook.")
     self.init_op = [control_flow_ops.no_op(ELASTIC_SUBGRAPH_INIT)]
+    self.del_op_list = []
     self.partition_num_ph = array_ops.placeholder(dtypes.int32, name='partition_num')
     self.op_list = self._init_ev_repartition_op()
     self.op_list.extend(self._init_var_repartition_op())
     with ops.control_dependencies(self.op_list):
       self.import_op = [control_flow_ops.no_op(ELASTIC_SUBGRAPH_IMPORT)]
+    with ops.control_dependencies(self.del_op_list):
+      self.destroy_op = [control_flow_ops.no_op(ELASTIC_SUBGRAPH_DESTROY)]
     #reserve for synchronization between chief and worker
     self._add_sync_graph()
     try:
@@ -113,11 +120,10 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
   def _check_scale(self, run_context):
     # from aimaster.python.proto import elastic_training_pb2, elastic_training_pb2_grpc
     # from aimaster.python.proto import scheduler_pb2
-    channel = grpc.insecure_channel(self._aimaster_addr)
     req = elastic_training_pb2.IsReadyScalingRequest()
     task_id = 0 if self._task_type == "chief" else 1
     req.task_index = task_id
-    _stub = elastic_training_pb2_grpc.ElasticTrainingServiceStub(channel)
+    _stub = elastic_training_pb2_grpc.ElasticTrainingServiceStub(self._channel)
     try:
       resp = _stub.IsReadyScaling(req)
       #reset sync variable
@@ -135,6 +141,7 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
             run_context.session.run(self.init_op)
             run_context.session.run(self.import_op,
                                     feed_dict={self.partition_num_ph: partition_num})
+            run_context.session.run(self.destroy_op)
             run_context.session.run(self.sync_ok)
           else:
             while False == run_context.session.run(self.read_sync):
@@ -163,6 +170,7 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
           if self._task_type == "chief":
             try:
               run_context.session.run(self.init_op)
+              run_context.session.run(self.destroy_op)
               run_context.session.run(self.sync_ok)
             except Exception as error:
               logging.info("failed to run init_ops in graph...")
@@ -188,8 +196,12 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
       idx = device_name.find("task:")
       post_name = device_name[idx:]
       post_idx = post_name.find("/")
+      no_device = False
       if post_idx == -1:
-        device_id = int(device_name[idx+len("task:"):])
+        try:
+          device_id = int(device_name[idx+len("task:"):])
+        except ValueError:
+          no_device = True
       else:
         device_id = int(post_name[len("task:"):post_idx])
       idx = ev_name.find("part_")
@@ -202,10 +214,12 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
         else:
           pre_name = ev_name[:idx-1] + ev_name[idx:][post_idx:]
           var_idx = int(ev_name[idx:][part_len:post_idx])
+        if no_device:
+          device_id = var_idx
         return True, pre_name, device_id, var_idx
       else:
-        new_op = self._add_tmp_variable(embedding_var)
-        return False, new_op, 0, 0
+        new_op, del_op = self._add_tmp_variable(embedding_var)
+        return False, new_op, del_op, 0
 
     with ops.name_scope(ELASTIC_IMPORT_SCOPE):
       for var in variable_list:
@@ -214,14 +228,16 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
           var_meta_map[pre_name].append((device_id, var_idx, var))
         elif pre_name is not None:
           op_list.append(pre_name)
+          self.del_op_list.append(device_id)
 
       for var_list in var_meta_map.values():
         var_list.sort(key= lambda x: x[1])
         var_read = [var[2] for var in var_list]
         if len(var_list) == 1:
           embedding_var = var_list[0][2]
-          new_op = self._add_tmp_variable(embedding_var)
+          new_op, del_op = self._add_tmp_variable(embedding_var)
           op_list.append(new_op)
+          self.del_op_list.append(del_op)
         else:
           read_value = array_ops.concat(var_read, axis=0) #partition_axis
           for var_meta in var_list:
@@ -254,9 +270,8 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
     for embedding_var in tot_ev_list:
       # pylint: disable=protected-access
       is_partitioned_ev = not isinstance(embedding_var._save_slice_info, str)
-      save_slice_info = embedding_var._save_slice_info
-      partition_num = save_slice_info.full_shape[0] if is_partitioned_ev else 1
-      partition_id = save_slice_info.var_offset[0] if is_partitioned_ev else 0
+      partition_num = embedding_var._save_slice_info.full_shape[0] if is_partitioned_ev else 1
+      partition_id = embedding_var._save_slice_info.var_offset[0] if is_partitioned_ev else 0
       # pylint: enable=protected-access
       pre_name, primary_name = process_ev_name(embedding_var)
       if pre_name not in var_map:
@@ -269,32 +284,35 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
     for primary_name, opt_name_list in primary_to_opt_map.items():
       primary_ev_list = list(filter(lambda x: x != None, var_map[primary_name]))
       partition_num = len(primary_ev_list)
+      if partition_num == 1:
+        continue
       tmp_op_list = [[] for _ in range(partition_num)]
       for opt_name in opt_name_list:
         opt_ev_list = list(filter(lambda x: x != None, var_map[opt_name]))
-        import_storage_map[opt_name]["keys"] = [None for _ in range(partition_num)]
-        import_storage_map[opt_name]["values"]  = [None for _ in range(partition_num)]
-        import_storage_map[opt_name]["versions"] = [None for _ in range(partition_num)]
-        import_storage_map[opt_name]["freqs"] = [None for _ in range(partition_num)]
+        import_storage_map[opt_name]["keys"] = [[] for _ in range(partition_num)]
+        import_storage_map[opt_name]["values"]  = [[] for _ in range(partition_num)]
+        import_storage_map[opt_name]["versions"] = [[] for _ in range(partition_num)]
+        import_storage_map[opt_name]["freqs"] = [[] for _ in range(partition_num)]
         for idx, embedding_var in enumerate(opt_ev_list):
           key_type = dtypes.as_dtype(embedding_var.handle.op.get_attr("Tkeys"))
           dtype = dtypes.as_dtype(embedding_var.handle.op.get_attr("dtype"))
           unneeded_ids, unneeded_values, unneeded_versions, unneeded_freqs = \
               redistribution_ops.kv_resource_filter(embedding_var,
                                                     self.partition_num_ph,
-                                                    key_type,
-                                                    dtype,
-                                                    partition_id=idx)
-          tmp_op_list[idx].append(unneeded_ids)
-          import_storage_map[opt_name]["keys"][idx] = unneeded_ids
-          import_storage_map[opt_name]["values"][idx] = unneeded_values
-          import_storage_map[opt_name]["versions"][idx] = unneeded_versions
-          import_storage_map[opt_name]["freqs"][idx] = unneeded_freqs
+                                                    key_type, dtype,
+                                                    partition_id=idx,
+                                                    partition_num=partition_num)
+          tmp_op_list[idx].extend(unneeded_ids)
+          for part_id in range(partition_num):
+            import_storage_map[opt_name]["keys"][part_id].append(unneeded_ids[part_id])
+            import_storage_map[opt_name]["values"][part_id].append(unneeded_values[part_id])
+            import_storage_map[opt_name]["versions"][part_id].append(unneeded_versions[part_id])
+            import_storage_map[opt_name]["freqs"][part_id].append(unneeded_freqs[part_id])
 
-      import_storage_map[primary_name]["keys"] = [None for _ in range(partition_num)]
-      import_storage_map[primary_name]["values"]  = [None for _ in range(partition_num)]
-      import_storage_map[primary_name]["versions"] = [None for _ in range(partition_num)]
-      import_storage_map[primary_name]["freqs"] = [None for _ in range(partition_num)]
+      import_storage_map[primary_name]["keys"] = [[] for _ in range(partition_num)]
+      import_storage_map[primary_name]["values"]  = [[] for _ in range(partition_num)]
+      import_storage_map[primary_name]["versions"] = [[] for _ in range(partition_num)]
+      import_storage_map[primary_name]["freqs"] = [[] for _ in range(partition_num)]
       for idx, embedding_var in enumerate(primary_ev_list):
         key_type = dtypes.as_dtype(embedding_var.handle.op.get_attr("Tkeys"))
         dtype = dtypes.as_dtype(embedding_var.handle.op.get_attr("dtype"))
@@ -303,30 +321,34 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
               redistribution_ops.kv_resource_filter(embedding_var, 
                                                     self.partition_num_ph,
                                                     key_type, dtype,
-                                                    partition_id=idx)
-        import_storage_map[primary_name]["keys"][idx] = unneeded_ids
-        import_storage_map[primary_name]["values"][idx] = unneeded_values
-        import_storage_map[primary_name]["versions"][idx] = unneeded_versions
-        import_storage_map[primary_name]["freqs"][idx] = unneeded_freqs
+                                                    partition_id=idx,
+                                                    partition_num=partition_num)
+        for part_id in range(partition_num):
+          import_storage_map[primary_name]["keys"][part_id].append(unneeded_ids[part_id])
+          import_storage_map[primary_name]["values"][part_id].append(unneeded_values[part_id])
+          import_storage_map[primary_name]["versions"][part_id].append(unneeded_versions[part_id])
+          import_storage_map[primary_name]["freqs"][part_id].append(unneeded_freqs[part_id])
 
 
     for primary_name, opt_name_list in primary_to_opt_map.items():
       primary_ev_list = list(filter(lambda x: x != None, var_map[primary_name]))
       partition_num = len(primary_ev_list)
+      if partition_num == 1:
+        continue
       tmp_op_list = [None for _ in range(partition_num)]
       for idx, embedding_var in enumerate(primary_ev_list):
         partition_id = idx if partition_num > 1 else 0
         # pylint: enable=protected-access
         # 1st input of ImportStorageOp is itself, it will be skipped in Kernel
-        tmp_key_list = import_storage_map[primary_name]["keys"].copy()
-        tmp_value_list = import_storage_map[primary_name]["values"].copy()
-        tmp_version_list = import_storage_map[primary_name]["versions"].copy()
-        tmp_freq_list = import_storage_map[primary_name]["freqs"].copy()
+        tmp_key_list = import_storage_map[primary_name]["keys"][partition_id].copy()
+        tmp_value_list = import_storage_map[primary_name]["values"][partition_id].copy()
+        tmp_version_list = import_storage_map[primary_name]["versions"][partition_id].copy()
+        tmp_freq_list = import_storage_map[primary_name]["freqs"][partition_id].copy()
 
-        imported_keys = [tmp_key_list.pop(partition_id)]
-        imported_values = [tmp_value_list.pop(partition_id)]
-        imported_versions = [tmp_version_list.pop(partition_id)]
-        imported_freqs = [tmp_freq_list.pop(partition_id)]
+        imported_keys = [tmp_key_list.pop(idx)]
+        imported_values = [tmp_value_list.pop(idx)]
+        imported_versions = [tmp_version_list.pop(idx)]
+        imported_freqs = [tmp_freq_list.pop(idx)]
 
         for i in range(len(tmp_key_list)):
           imported_keys.append(tmp_key_list[i])
@@ -347,15 +369,15 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
           partition_id = idx if partition_num > 1 else 0
           # pylint: enable=protected-access
           # 1st input of ImportStorageOp is itself, it will be skipped in Kernel
-          tmp_key_list = import_storage_map[opt_name]["keys"].copy()
-          tmp_value_list = import_storage_map[opt_name]["values"].copy()
-          tmp_version_list = import_storage_map[opt_name]["versions"].copy()
-          tmp_freq_list = import_storage_map[opt_name]["freqs"].copy()
+          tmp_key_list = import_storage_map[opt_name]["keys"][partition_id].copy()
+          tmp_value_list = import_storage_map[opt_name]["values"][partition_id].copy()
+          tmp_version_list = import_storage_map[opt_name]["versions"][partition_id].copy()
+          tmp_freq_list = import_storage_map[opt_name]["freqs"][partition_id].copy()
 
-          imported_keys = [tmp_key_list.pop(partition_id)]
-          imported_values = [tmp_value_list.pop(partition_id)]
-          imported_versions = [tmp_version_list.pop(partition_id)]
-          imported_freqs = [tmp_freq_list.pop(partition_id)]
+          imported_keys = [tmp_key_list.pop(idx)]
+          imported_values = [tmp_value_list.pop(idx)]
+          imported_versions = [tmp_version_list.pop(idx)]
+          imported_freqs = [tmp_freq_list.pop(idx)]
 
           for i in range(len(tmp_key_list)):
             imported_keys.append(tmp_key_list[i])
@@ -390,26 +412,24 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
     else:
       device_context = self._base_cpu_device
     with ops.device(device_context):
-      use_resource = resource_variable_ops.is_resource_variable(embedding_var)
+      # use_resource = resource_variable_ops.is_resource_variable(embedding_var)
       if embedding_var.dtype == dtypes.int64_ref:
-        p = variables.VariableV1(array_ops.ones(embedding_var.shape, dtypes.int64), 
-                                dtype=dtypes.int64,
-                                name=embedding_var.name[:-2],
-                                use_resource=use_resource,
-                                collections=[ops.GraphKeys.LOCAL_VARIABLES])
+        init_var = array_ops.ones(embedding_var.shape, dtypes.int64)
+        dtype = dtypes.int64
       else:
-        p = variables.VariableV1(array_ops.ones(embedding_var.shape), 
-                                dtype=dtypes.float32,
-                                name=embedding_var.name[:-2],
-                                use_resource=use_resource,
-                                collections=[ops.GraphKeys.LOCAL_VARIABLES])
-      if use_resource:
-        new_op = p.assign(embedding_var.read_value())
-      else:
-        new_op = state_ops.assign(p, 
+        init_var = array_ops.ones(embedding_var.shape)
+        dtype = dtypes.float32
+      
+      p = variables.VariableV1(init_var,
+                               dtype=dtype,
+                               name=embedding_var.name[:-2],
+                               use_resource=True,
+                               collections=[ops.GraphKeys.LOCAL_VARIABLES])
+      new_op = state_ops.assign(p, 
                                 embedding_var.read_value(),
                                 validate_shape=False)
-    return new_op
+      del_op = resource_variable_ops.destroy_resource_op(p.handle)
+    return new_op, del_op
 
   def _rewrite_op_device(self, partition_num):
     graph = ops.get_default_graph()

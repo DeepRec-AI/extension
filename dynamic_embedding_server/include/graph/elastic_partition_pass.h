@@ -21,7 +21,6 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/optimization_registry.h"
 #include "tensorflow/core/graph/graph_constructor.h"
 #include "tensorflow/core/graph/node_builder.h"
-#include "tensorflow/core/util/env_var.h"
 
 namespace tensorflow {
 
@@ -51,37 +50,32 @@ struct ElasticHookMetaNode {
 
 class PartitionedVariable {
  public:
-  PartitionedVariable(): g(nullptr), meta_node(nullptr),
-      var_type(VarType::EMBEDDING_VAR), part_var_full_shape(0),
-      ev_partition_num(0), cur_partition_nums_(0), variable_prefix("") {}
+  PartitionedVariable()
+      : g(nullptr),
+        meta_node(nullptr),
+        var_type(VarType::EMBEDDING_VAR),
+        part_var_full_shape(0),
+        ev_partition_num(0),
+        cur_partition_nums_(0),
+        variable_prefix("") {}
 
-  ~PartitionedVariable() {}
-
-  explicit PartitionedVariable(Graph* graph, ElasticHookMetaNode* m_node)
+  PartitionedVariable(Graph* graph, ElasticHookMetaNode* m_node)
       : g(graph),
         meta_node(m_node),
         var_type(VarType::REF_VAR),
         part_var_full_shape(0),
         ev_partition_num(1) {}
 
-  void Prepare();
+  ~PartitionedVariable() {}
 
-  Status Scaling(int cur_partition_nums);
+  void Prepare(int prev_partition_ratio);
 
-  Status ScalingUp(std::unordered_set<Node*>& nodes_to_delete);
+  Status Scaling(int cur_partition_nums, int prev_partition_ratio);
+
+  Status ScalingUp(std::unordered_set<Node*>& nodes_to_delete,
+                   int prev_partition_ratio);
 
   Status ScalingDown(std::unordered_set<Node*>& nodes_to_delete);
-  
-  std::string DebugString() {
-    std::stringstream debug_string;
-    debug_string << "processing: " << variable_prefix << " var_type "
-                 << var_type << " opt_name size: " << sorted_opt_ev_names.size()
-                 << " ev_num: " << ev_partition_num << "\n";
-    for (auto& it : node_device_map) {
-      debug_string << it.first->name() << " device_id: " << it.second << "\n";
-    }
-    return debug_string.str();
-  }
 
   Graph* g;
   ElasticHookMetaNode* meta_node;
@@ -97,36 +91,51 @@ class PartitionedVariable {
   std::unordered_map<std::string, PartIdToNodeMap> node_map;
 
  private:
+  std::string DebugString() {
+    std::stringstream debug_string;
+    debug_string << "processing: " << variable_prefix << " var_type "
+                 << var_type << " opt_name size: " << sorted_opt_ev_names.size()
+                 << " ev_num: " << ev_partition_num << "\n";
+    for (auto& it : node_device_map) {
+      debug_string << it.first->name() << " device_id: " << it.second << "\n";
+    }
+    return debug_string.str();
+  }
+
   Status ScalingDownSparseVariableBackWardGraph(
-      std::unordered_set<Node*>& nodes_to_delete, Node* elastic_node,
-      Node* p_dynamic_stitch_node, std::vector<bool>& part_to_scale_down);
+      std::unordered_set<Node*>& nodes_to_delete, Node* data_dp_node,
+      Node* indices_dp_node, Node* p_dynamic_stitch_node,
+      std::vector<bool>& part_to_scale_down);
 
   Status ScalingDownDenseBackWardGraph(
-      std::unordered_set<Node*>& nodes_to_delete, Node* elastic_node,
+      std::unordered_set<Node*>& nodes_to_delete,
       std::vector<bool>& part_to_scale_down);
 
   Status ScalingUpSparseVariableBackWardGraph(int original_indices,
-                                              Node* elastic_node,
+                                              Node* data_dp_node,
+                                              Node* indices_dp_node,
                                               Node* p_dynamic_stitch_node,
                                               std::vector<Node*>& no_op_vec,
                                               std::vector<int>& part_to_device);
 
-  Status ScalingUpDenseBackWardGraph(int original_indices, Node* elastic_node,
+  Status ScalingUpDenseBackWardGraph(int original_indices, Node* data_dp_node,
+                                     Node* indices_dp_node,
                                      std::vector<Node*>& no_op_vec,
                                      std::vector<int>& part_to_device);
 
   Status ScalingDownBackWardGraph(std::unordered_set<Node*>& nodes_to_delete,
-                                  Node* elastic_node,
+                                  Node* data_dp_node, Node* indices_dp_node,
                                   Node* p_dynamic_stitch_node,
                                   std::vector<bool>& part_to_scale_down);
 
-  Status ScalingUpBackWardGraph(int original_indices, Node* elastic_node,
+  Status ScalingUpBackWardGraph(int original_indices, Node* data_dp_node,
+                                Node* indices_dp_node,
                                 Node* p_dynamic_stitch_node,
                                 std::vector<Node*>& no_op_vec,
                                 std::vector<int>& part_to_device);
 
   Status RewriteElasticPartitionGraph(
-      PartIdToNodeMap& ev_node_vec, Node** elastic_node,
+      PartIdToNodeMap& ev_node_vec, Node** data_dp_node, Node** indices_dp_node,
       Node** p_dynamic_stitch_node, std::unordered_set<Node*>& nodes_to_delete);
 
   Status ScalingUpRedistributionGraph(int original_indices,
@@ -173,14 +182,16 @@ class PartitionedVariable {
 
   Status ScalingUpForWardGraph(int original_indices,
                                std::vector<int>& part_to_device,
-                               std::unordered_set<Node*>& nodes_to_delete);
+                               std::unordered_set<Node*>& nodes_to_delete,
+                               int prev_partition_ratio);
 
   Status ScalingDownForWardGraph(std::vector<bool>& part_to_scale_down,
                                  std::unordered_set<Node*>& nodes_to_delete);
 
   Status ScalingUpVarForWardGraph(int original_indices,
                                   const std::string& var_name,
-                                  std::vector<int>& part_to_device);
+                                  std::vector<int>& part_to_device,
+                                  int prev_partition_ratio);
 
   Status ScalingUpEVForWardGraph(int original_indices,
                                  std::vector<int>& part_to_device,
@@ -231,7 +242,9 @@ class ElasticTrainingPass : public GraphOptimizationPass {
 
  private:
   static int cur_partition_nums_;
+  int prev_partition_ratio_;
   bool scaling_up_{false};
+  bool initialized_{false};
 };
 
 }  // namespace tensorflow

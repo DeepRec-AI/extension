@@ -38,11 +38,12 @@ def re_assign(variable, value, partition_num_in, partition_id, device_id, prev_p
                                                   device_id=device_id,
                                                   partition_nums=prev_part_num)
 
-def kv_resource_filter(embedding_var, partition_num_in, key_type, dtype, partition_id):
+def kv_resource_filter(embedding_var, partition_num_in, key_type, dtype, partition_id, partition_num):
     return dynamic_embedding_server_ops.kv_resource_filter(embedding_var.handle,
-                                                            partition_num_in,
-                                                            key_type,
-                                                            dtype,
+                                                            new_partition_nums=partition_num_in,
+                                                            partition_nums=partition_num,
+                                                            Tkeys=key_type,
+                                                            dtype=dtype,
                                                             partition_id=partition_id)
 
 def kv_resource_mul_import(embedding_var, partition_num_in, keys, values, versions, freqs, partition_id):

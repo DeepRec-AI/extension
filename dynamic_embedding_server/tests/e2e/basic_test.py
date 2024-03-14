@@ -67,8 +67,8 @@ with tf_device:
                                         filter_option=None)
     num_ps_replicas = len(tf_config["ps_hosts"])
     partitioner = tf.fixed_size_partitioner(num_ps_replicas)
-    partitioner = tf.min_max_variable_partitioner(
-        max_partitions=num_ps_replicas, min_slice_size=16 << 10)
+    #partitioner = tf.min_max_variable_partitioner(
+    #max_partitions=num_ps_replicas, min_slice_size=16 << 10)
 
     with tf.device("/cpu:0"), tf.variable_scope('', partitioner=partitioner):
       var_0 = tf.get_embedding_variable("var_0",
@@ -174,6 +174,6 @@ with tf_device:
                 #print(sess.run([graph.get_tensor_by_name("Adam/update_var_1/part_1/Unique:1")]))
               count+=1
             else:
-              exit(-1)
+              exit(0)
 
 

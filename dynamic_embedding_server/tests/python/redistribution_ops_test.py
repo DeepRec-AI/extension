@@ -46,7 +46,7 @@ class RedistributionOpsTest(test.TestCase):
         partitioner = partitioned_variables.fixed_size_partitioner(origin_partition_num)
         with ops.device("/cpu:0"):
             var_0 = variable_scope.get_embedding_variable("var_0",
-                                        embedding_dim=16,
+                                        embedding_dim=8,
                                         initializer=init_ops.ones_initializer(dtypes.float32),
                                         partitioner=partitioner,
                                         ev_option = variables.EmbeddingVariableOption(filter_option=None))
@@ -71,11 +71,11 @@ class RedistributionOpsTest(test.TestCase):
         imported_freqs = [math_ops.cast([0,1,2,3,4,5], dtypes.int64)]
         for idx, embedding_var in enumerate(variable_list):
             unneeded_ids, unneeded_values, unneeded_versions, unneeded_freqs = \
-                redistribution_ops.kv_resource_filter(embedding_var, partition_num_ph, dtypes.int64, dtypes.float32, idx)
-            imported_keys.append(unneeded_ids)
-            imported_values.append(unneeded_values)
-            imported_freqs.append(unneeded_freqs)
-            imported_versions.append(unneeded_versions)
+                redistribution_ops.kv_resource_filter(embedding_var, partition_num_ph, dtypes.int64, dtypes.float32, idx, partition_num)
+            imported_keys.extend(unneeded_ids)
+            imported_values.extend(unneeded_values)
+            imported_freqs.extend(unneeded_freqs)
+            imported_versions.extend(unneeded_versions)
         
         run_ops_list= []
         for idx, embedding_var in enumerate(variable_list):
@@ -89,16 +89,16 @@ class RedistributionOpsTest(test.TestCase):
             sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
             sess.run([init])
             tmp_shape, tmp_shape_1 = sess.run([shape, shape_1])
-            self.assertAllEqual(np.array([0,16]), tmp_shape)
-            self.assertAllEqual(np.array([0,16]), tmp_shape_1)
+            self.assertAllEqual(np.array([0,8]), tmp_shape)
+            self.assertAllEqual(np.array([0,8]), tmp_shape_1)
             sess.run([emb, train_op, loss])
             tmp_shape, tmp_shape_1 = sess.run([shape, shape_1])
-            self.assertAllEqual(np.array([3,16]), tmp_shape)
-            self.assertAllEqual(np.array([3,16]), tmp_shape_1)
+            self.assertAllEqual(np.array([3,8]), tmp_shape)
+            self.assertAllEqual(np.array([3,8]), tmp_shape_1)
             sess.run(run_ops_list, feed_dict={partition_num_ph: partition_num})
             tmp_shape, tmp_shape_1 = sess.run([shape, shape_1])
-            self.assertAllEqual(np.array([2,16]), tmp_shape)
-            self.assertAllEqual(np.array([2,16]), tmp_shape_1)
+            self.assertAllEqual(np.array([2,8]), tmp_shape)
+            self.assertAllEqual(np.array([2,8]), tmp_shape_1)
     
     def testEVRedistributionScalingDown(self):
         origin_partition_num = 3
@@ -117,30 +117,41 @@ class RedistributionOpsTest(test.TestCase):
         opt = adagrad.AdagradOptimizer(0.1)
         g_v = opt.compute_gradients(loss)
         train_op = opt.apply_gradients(g_v, gs)
-        partition_num = 3
+        partition_num = 2
         variable_list = var_0._get_variable_list()
         init = variables.global_variables_initializer()
         shape = variable_list[0].get_dynamic_shape()
         shape_1 = variable_list[1].get_dynamic_shape()
         
 
-        imported_keys = [math_ops.cast([0,1,2,3,4,5], dtypes.int64)]
-        imported_values = [math_ops.cast([0,1,2,3,4,5], dtypes.float32)]
-        imported_versions = [math_ops.cast([0,1,2,3,4,5], dtypes.int64)]
-        imported_freqs = [math_ops.cast([0,1,2,3,4,5], dtypes.int64)]
+        imported_keys = []
+        imported_values = []
+        imported_versions = []
+        imported_freqs = []
         for idx, embedding_var in enumerate(variable_list):
             unneeded_ids, unneeded_values, unneeded_versions, unneeded_freqs = \
-                redistribution_ops.kv_resource_filter(embedding_var, partition_num_ph, dtypes.int64, dtypes.float32, idx)
-            imported_keys.append(unneeded_ids)
-            imported_values.append(unneeded_values)
-            imported_freqs.append(unneeded_freqs)
-            imported_versions.append(unneeded_versions)
+                redistribution_ops.kv_resource_filter(embedding_var, partition_num_ph, dtypes.int64, dtypes.float32, idx, partition_num)
+            imported_keys.extend(unneeded_ids)
+            imported_values.extend(unneeded_values)
+            imported_freqs.extend(unneeded_freqs)
+            imported_versions.extend(unneeded_versions)
         
         run_ops_list= []
         for idx, embedding_var in enumerate(variable_list):
+            sorted_imported_keys = [imported_keys[idx]]
+            sorted_imported_values = [imported_values[idx]]
+            sorted_imported_versions = [imported_versions[idx]]
+            sorted_imported_freqs = [imported_freqs[idx]]
+            for i in range(origin_partition_num):
+                if i != idx:
+                    sorted_imported_keys.append(imported_keys[i])
+                    sorted_imported_values.append(imported_values[i])
+                    sorted_imported_versions.append(imported_versions[i])
+                    sorted_imported_freqs.append(imported_freqs[i])
+
             a = redistribution_ops.kv_resource_mul_import( \
-                embedding_var, partition_num_ph, imported_keys, imported_values,
-                imported_versions, imported_freqs, partition_id=idx)
+                embedding_var, partition_num_ph, sorted_imported_keys, sorted_imported_values,
+                sorted_imported_versions, sorted_imported_freqs, partition_id=idx)
             run_ops_list.append(a)
 
         with self.test_session() as sess:

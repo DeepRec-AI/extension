@@ -208,7 +208,7 @@ class ElasticPartitionOp : public OpKernel {
   }
 
   void BucketlizedModulo(const int64* data, int nums, int64* partitions) {
-#if !defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
+#if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
     __m512d _b = _mm512_set1_pd(num_partitions_);
     for (int i = 0; i < nums; i += 8) {
       int index = i / 8;
@@ -238,28 +238,28 @@ class ElasticPartitionOp : public OpKernel {
   }
 
   void ModModulo(const int64* data, int nums, int64* partitions) {
-    // #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
-    //     __m512d _b = _mm512_set1_pd(num_partitions_);
-    //     for (int i = 0; i < nums; i += 8) {
-    //       int index = i / 8;
-    //       int remain = nums - i;
-    //       __mmask8 mask = (remain >= 8 ? 0xff : (1 << remain) - 1);
-    //       __m512d _a = _mm512_maskz_loadu_pd(mask, data + i);
-    //       __m512d _d = _mm512_div_round_pd(
-    //           _a, _b, (_MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC));
-    //       __m512d _m = _mm512_mul_pd(_b, _d);
-    //       //__m256i _r = _mm512_maskz_cvt_roundpd_epi32(mask,
-    //       _mm512_sub_pd(_a, _m),
-    //       //_MM_FROUND_TO_NEG_INF |_MM_FROUND_NO_EXC);
-    //       __m512i _r = _mm512_castpd_si512(_mm512_sub_pd(_a, _m));
-    //       _mm512_mask_storeu_epi64(partitions + i, mask, _r);
-    //       // _mm256_mask_store_epi32(partitions + i, mask, _r);
-    //     }
-    // #else
+#if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
+    __m512d _b = _mm512_set1_pd(num_partitions_);
+    for (int i = 0; i < nums; i += 8) {
+      int index = i / 8;
+      int remain = nums - i;
+      __mmask8 mask = (remain >= 8 ? 0xff : (1 << remain) - 1);
+      __m512d _a = _mm512_maskz_loadu_pd(mask, data + i);
+      __m512d _d = _mm512_div_round_pd(
+          _a, _b, (_MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC));
+      __m512d _m = _mm512_mul_pd(_b, _d);
+      //__m256i _r = _mm512_maskz_cvt_roundpd_epi32(mask,
+      _mm512_sub_pd(_a, _m),
+          //_MM_FROUND_TO_NEG_INF |_MM_FROUND_NO_EXC);
+          __m512i _r = _mm512_castpd_si512(_mm512_sub_pd(_a, _m));
+      _mm512_mask_storeu_epi64(partitions + i, mask, _r);
+      // _mm256_mask_store_epi32(partitions + i, mask, _r);
+    }
+#else
     for (int i = 0; i < nums; ++i) {
       partitions[i] = data[i] % num_partitions_;
     }
-    // #endif
+#endif
   }
 
   void ModModulo(const int32* data, int nums, int64* partitions) {
@@ -269,28 +269,9 @@ class ElasticPartitionOp : public OpKernel {
   }
 
   void DivisionModulo(const int64* data, int nums, int64* partitions) {
-    // #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
-    //     __m512d _b = _mm512_set1_pd(num_partitions_);
-    //     for (int i = 0; i < nums; i += 8) {
-    //       int index = i / 8;
-    //       int remain = nums - i;
-    //       __mmask8 mask = (remain >= 8 ? 0xff : (1 << remain) - 1);
-    //       __m512d _a = _mm512_maskz_loadu_pd(mask, data + i);
-    //       __m512d _d = _mm512_div_round_pd(
-    //           _a, _b, (_MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC));
-    //       __m512d _m = _mm512_mul_pd(_b, _d);
-    //       //__m256i _r = _mm512_maskz_cvt_roundpd_epi32(mask,
-    //       _mm512_sub_pd(_a, _m),
-    //       //_MM_FROUND_TO_NEG_INF |_MM_FROUND_NO_EXC);
-    //       __m512i _r = _mm512_castpd_si512(_mm512_sub_pd(_a, _m));
-    //       _mm512_mask_storeu_epi64(partitions + i, mask, _r);
-    //       // _mm256_mask_store_epi32(partitions + i, mask, _r);
-    //     }
-    // #else
     for (int i = 0; i < nums; ++i) {
       partitions[i] = data[i] / num_partitions_;
     }
-    // #endif
   }
 
   void DivisionModulo(const int32* data, int nums, int64* partitions) {

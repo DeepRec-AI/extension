@@ -122,7 +122,6 @@ template <typename T>
 struct CustomDenseUpdate<CPUDevice, T> {
   void operator()(const CPUDevice& d, typename TTypes<T>::Flat params,
                   typename TTypes<T>::Flat update) {
-    LOG(INFO) << " ===== ";
     params.device(d) = update;
   }
 };
