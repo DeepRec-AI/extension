@@ -25,7 +25,7 @@ limitations under the License.
 #include "tensorflow/core/util/dump_graph.h"
 #include "tensorflow/core/util/env_var.h"
 
-constexpr char kEnableElasticEnv[] = "ENABLE_ELASTIC";
+constexpr char kEnableElasticEnv[] = "ENABLE_DES";
 constexpr char kEvInitOp[] = "InitializeKvVariableV2Op";
 constexpr char kEvImportOp[] = "ImportStorage";
 constexpr char kEvExportOp[] = "FilterStorage";
