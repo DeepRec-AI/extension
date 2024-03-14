@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package des;
 
-//CODE FROM AIMASTER schedule.proto
 enum Code {
   OK                  = 0;
   CANCELLED           = 1;
@@ -22,6 +21,12 @@ enum Code {
   DATA_LOSS           = 15;
   UNAUTHENTICATED     = 16;
   REQUEST_STOP        = 17;
+}
+
+enum ElasticTrainingState {
+  READY = 0;
+  SCALING = 1;
+  All_SESSION_CLOSED = 2;
 }
 
 enum ScalingAction {
