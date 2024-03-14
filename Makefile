@@ -1,4 +1,5 @@
 CXX ?= gcc
+NVCC ?= nvcc
 
 ifeq ($(PYTHON_VERSION), 2)
 $(warning using python version 2)
@@ -13,6 +14,8 @@ CFLAGS := -O3 -g \
 	-Iinclude \
 	-I.
 
+LIBNAME := dynamic_embedding_server
+
 CXX_CFLAGS := -std=c++11 \
 	-fstack-protector \
 	-Wall \
@@ -25,7 +28,6 @@ LDFLAGS := -shared \
 	-fstack-protector \
 	-fpic
 
-
 GAZER_LIB := gazer/libgazer.so
 include gazer/cc/Makefile
 
@@ -36,18 +38,29 @@ gazer: $(GAZER_LIB)
 	cd gazer/; $(PYTHON) setup.py bdist_wheel
 	@ls gazer/dist/*.whl
 
+DES_LIB := $(LIBNAME)/lib$(LIBNAME).so
+include $(LIBNAME)/cc/Makefile
+
+.PHONY: des
+des: $(DES_LIB)
+	@echo -e "\033[1;33m[BUILD] $$t \033[0m" \
+        "build wheel package"
+	cd $(LIBNAME); $(PYTHON) setup.py bdist_wheel
+	@ls $(LIBNAME)/dist/*.whl
+
 .PHONY: clean
 clean:
 	@rm -fr gazer/dist/
 	@rm -fr gazer/build/
 	@rm -fr gazer/*.egg-info/
+	@rm -fr $(LIBNAME)/dist/
+	@rm -fr $(LIBNAME)/build/
+	@rm -fr $(LIBNAME)/*.egg-info/
 	@rm -fr third_party/rapidjson/build
 	@rm -fr third_party/grpc/build
 	@rm -fr third_party/protobuf/build
 	@echo "remove .o/.d/.so/.pb*"
 	@find ./ -name *.pb.* -exec rm -rf {} \;
-	@find -name *.o -exec rm -fr {} \;
-	@find -name *.d -exec rm -fr {} \;
-	@find -name *.so -exec rm -fr {} \;
+	@find ./ -name *_pb2* -exec rm -fr {} \;
 
 .DEFAULT_GOAL := gazer
