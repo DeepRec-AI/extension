@@ -25,7 +25,6 @@ limitations under the License.
 #include "tensorflow/core/util/dump_graph.h"
 #include "tensorflow/core/util/env_var.h"
 
-constexpr char kEnableElasticEnv[] = "ENABLE_DES";
 constexpr char kEvInitOp[] = "InitializeKvVariableV2Op";
 constexpr char kEvImportOp[] = "ImportStorage";
 constexpr char kEvExportOp[] = "FilterStorage";
@@ -65,17 +64,14 @@ Status UpdatePartitionNums(int& partition_nums) {
 }
 
 Status ElasticTrainingPass::Run(const GraphOptimizationPassOptions& options) {
-  bool enable_elastic_training = false;
-  TF_RETURN_IF_ERROR(
-      ReadBoolFromEnvVar(kEnableElasticEnv, false, &enable_elastic_training));
-
-  if (!enable_elastic_training) {
-    LOG(INFO) << "Elastic training not enable.";
-    return Status::OK();
-  }
-
   int partition_nums;
   TF_RETURN_IF_ERROR(UpdatePartitionNums(partition_nums));
+
+  Graph* graph = options.graph->get();
+  if (graph == nullptr) {
+    return errors::Internal("a graph should be available.");
+  }
+
   if (cur_partition_nums_ == 0) {
     cur_partition_nums_ = partition_nums;
     return Status::OK();
@@ -85,11 +81,6 @@ Status ElasticTrainingPass::Run(const GraphOptimizationPassOptions& options) {
   } else {
     scaling_up_ = partition_nums > cur_partition_nums_;
     cur_partition_nums_ = partition_nums;
-  }
-
-  Graph* graph = options.graph->get();
-  if (graph == nullptr) {
-    return errors::Internal("a graph should be available.");
   }
   std::unique_ptr<Graph> new_graph(new Graph(OpRegistry::Global()));
   CopyGraph(*graph, new_graph.get());
