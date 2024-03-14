@@ -88,11 +88,39 @@ $(OBJS): %.o:%.cc protobuf grpc proto
 	sed -i '/site-packages/d' $<.d
 	sed -i '/^$$/N;/^\n$$/D' $<.d
 
+CU_SOURCES = $(shell \
+	find -type f \
+	\( -name '*.cu.cc' ! -name "*test*" \) \
+	-exec realpath {} --relative-to . \;')
+
+$(CU_OBJS): %.o:%.cc
+	mkdir -p $(dir $@)
+	@$(NVCC) -M $< $(CFLAGS) -x cu \
+	 | grep -v '/usr/' \
+	 | sed 's|$(notdir $@)|$@|g' \
+	 | sed 's|\./||g' \
+	 > $<.d
+	$(NVCC) \
+		--std=c++11 \
+		--expt-relaxed-constexpr \
+		--expt-extended-lambda \
+		--disable-warnings \
+		-o $@ -c $< $(CFLAGS) -x cu \
+		-Xcompiler -fPIC
+
 -include $(DEPS)
 
+ifneq ($(CUDA_CFLAGS),)
+$(DES_LIB): $(OBJS) $(CU_OBJS)
+	mkdir -p $(dir $@)
+	$(CXX) $(CFLAGS) -std=c++11 \
+        -o $@ $(PROTO_OBJ) $(OBJS)  $(CU_OBJS) \
+        $(TENSORFLOW_LDFLAGS) $(LDFLAGS) $(CUDA_LDFLAGS)
+else
 $(DES_LIB): $(OBJS)
 	mkdir -p $(dir $@)
 	$(CXX) $(CFLAGS) -std=c++11 \
         -o $@ $(PROTO_OBJ) $(OBJS) \
         $(TENSORFLOW_LDFLAGS) $(LDFLAGS)
+endif
         

@@ -35,18 +35,18 @@ def re_assign(variable, value, partition_num_in, partition_id, prev_part_num):
                                                   partition_id,
                                                   prev_part_num)
 
-def filter_storage(embedding_var, partition_num_in, key_type, dtype, partition_id):
-    return dynamic_embedding_server_ops.filter_storage(embedding_var.handle,
-                                                  partition_num_in,
-                                                  key_type,
-                                                  dtype,
-                                                  partition_id=partition_id)
+def kv_resource_filter(embedding_var, partition_num_in, key_type, dtype, partition_id):
+    return dynamic_embedding_server_ops.kv_resource_filter(embedding_var.handle,
+                                                            partition_num_in,
+                                                            key_type,
+                                                            dtype,
+                                                            partition_id=partition_id)
 
-def import_storage(embedding_var, keys, values, versions, freqs, partition_id):
-    return dynamic_embedding_server_ops.import_storage(embedding_var.handle,
-                                                        keys,
-                                                        values,
-                                                        versions,
-                                                        freqs,
-                                                        partition_id=partition_id)
+def kv_resource_mul_import(embedding_var, keys, values, versions, freqs, partition_id):
+    return dynamic_embedding_server_ops.kv_resource_mul_import(embedding_var.handle,
+                                                                keys,
+                                                                values,
+                                                                versions,
+                                                                freqs,
+                                                                partition_id=partition_id)
     

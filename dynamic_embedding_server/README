@@ -1,0 +1,58 @@
+# DynamicEmbeddingServer: Elastic Training module for DeepRec/TenosrFlow
+
+## Description
+
+在社区TensorFlow或社区DeepRec中引入DES module。配合Controller角色，可以实现动态扩缩容PS以提高训练任务的资源利用率。
+
+## How to build
+
+Build DynamicEmbeddingServer in TensorFlow/DeepRec develop docker
+
+1. start container
+
+  image: alideeprec/deeprec-dev:deeprec-extension-cpu-py36-ubuntu18.04
+
+2. build des
+- 首先需要初始化第三方库
+```shell
+    git submodule update --init --recursive
+```
+
+- CPU版本
+```shell
+  make -j16 GPU_MODE=false
+```
+-GPU版本
+```shell
+    make -j16 GPU_MODE=true
+```
+
+3. install des
+
+```shell
+  pip install dist/dynamic_embedding_server-1.0-cp36-cp36m-linux_x86_64.whl
+```
+
+## How to use
+
+DynamicEmbeddingServer需要结合一个Controller角色同时使用，Controller的作用是通过外部来源的资源监控指标，
+定期决策出当前Tensorflow Job需要的PS资源数。资源监控推荐使用 `Gazer`
+用户需要使用TensorFlow::Estiamtor 构造模型，或者自行使用底层API进行构图（需要Session中含有ElasticTrainingHook）
+在所有worker/ps 的python 脚本中增加
+
+```python
+import dynamic_embedding_server
+
+with tf.train.MonitoredTrainingSession(
+    master=server.target if server else '',
+    is_chief=tf_config['is_chief'] if tf_config else True,
+    hooks=[dynamic_embedding_server.python.ElasticTrainingHooks()],
+    scaffold=scaffold,
+    checkpoint_dir='./result',
+    save_checkpoint_steps=1000,
+    summary_dir='./result',
+    save_summaries_steps=1000,
+    config=sess_config) as sess:
+    sess.run()
+```
+即可应用该功能

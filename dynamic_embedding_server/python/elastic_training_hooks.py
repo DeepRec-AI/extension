@@ -277,11 +277,11 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
           key_type = dtypes.as_dtype(embedding_var.handle.op.get_attr("Tkeys"))
           dtype = dtypes.as_dtype(embedding_var.handle.op.get_attr("dtype"))
           unneeded_ids, unneeded_values, unneeded_versions, unneeded_freqs = \
-              redistribution_ops.filter_storage(embedding_var,
-                                                 self.partition_num_ph,
-                                                 key_type,
-                                                 dtype,
-                                                 partition_id=idx)
+              redistribution_ops.kv_resource_filter(embedding_var,
+                                                    self.partition_num_ph,
+                                                    key_type,
+                                                    dtype,
+                                                    partition_id=idx)
           tmp_op_list[idx].append(unneeded_ids)
           import_storage_map[opt_name]["keys"][idx] = unneeded_ids
           import_storage_map[opt_name]["values"][idx] = unneeded_values
@@ -297,10 +297,10 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
         dtype = dtypes.as_dtype(embedding_var.handle.op.get_attr("dtype"))
         with ops.control_dependencies(tmp_op_list[idx]):
           unneeded_ids, unneeded_values, unneeded_versions, unneeded_freqs = \
-              redistribution_ops.filter_storage(embedding_var, 
-                                                self.partition_num_ph,
-                                                key_type, dtype,
-                                                partition_id=idx)
+              redistribution_ops.kv_resource_filter(embedding_var, 
+                                                    self.partition_num_ph,
+                                                    key_type, dtype,
+                                                    partition_id=idx)
         import_storage_map[primary_name]["keys"][idx] = unneeded_ids
         import_storage_map[primary_name]["values"][idx] = unneeded_values
         import_storage_map[primary_name]["versions"][idx] = unneeded_versions
@@ -332,7 +332,7 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
         imported_versions.append(tmp_version_list[i])
         imported_freqs.append(tmp_freq_list[i])
 
-      op_list.append(redistribution_ops.import_storage( \
+      op_list.append(redistribution_ops.kv_resource_mul_import( \
           embedding_var, imported_keys, imported_values,
           imported_versions, imported_freqs, partition_id=partition_id))
 

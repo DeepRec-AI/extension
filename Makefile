@@ -9,8 +9,28 @@ $(warning default using python version 3)
 PYTHON ?= python3
 endif
 
+ifeq ($(GPU_MODE), true)
+$(warning dynamic_embedding_server is building with GPU enabled)
+CUDA_HOME ?= /usr/local/cuda
+CUDA_CFLAGS ?= \
+	-DGOOGLE_CUDA=1 \
+	-I$(CUDA_HOME)/include
+
+CUDA_LDFLAGS ?= \
+	-L$(CUDA_HOME)/lib64 \
+	-lcudart \
+	-L/usr/lib64 \
+	-lnccl
+else
+CUDA_HOME := 
+CUDA_CFLAGS :=
+
+CUDA_LDFLAGS :=
+endif
+
 CFLAGS := -O3 -g \
 	-DNDEBUG \
+	$(CUDA_CFLAGS) \
 	-Iinclude \
 	-I.
 
@@ -26,7 +46,8 @@ CXX_CFLAGS := -std=c++11 \
 
 LDFLAGS := -shared \
 	-fstack-protector \
-	-fpic
+	-fpic \
+	$(CUDA_LDFLAGS)
 
 GAZER_LIB := gazer/libgazer.so
 include gazer/cc/Makefile
