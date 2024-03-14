@@ -57,8 +57,7 @@ proto: grpc
 	@echo "generating pb file"
 	$(PROTOC) --cpp_out=./ dynamic_embedding_server/proto/elastic_training.proto
 	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PLUGIN) dynamic_embedding_server/proto/elastic_training.proto
-	# $(PROTOC) --python_out=./ dynamic_embedding_server/proto/elastic_training.proto dynamic_embedding_server/proto/elastic_training.proto
-	python -m grpc_tools.protoc --proto_path=. --python_out=./ --grpc_python_out=./ dynamic_embedding_server/proto/elastic_training.proto
+	$(PROTOC) --proto_path=. --python_out=./ dynamic_embedding_server/proto/elastic_training.proto
 	$(CXX) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(PROTO_DIR)/elastic_training.pb.cc -o $(PROTO_BUILT_DIR)/elastic_training.pb.o
 	$(CXX) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(PROTO_DIR)/elastic_training.grpc.pb.cc -o $(PROTO_BUILT_DIR)/elastic_training.grpc.pb.o
 
@@ -78,7 +77,6 @@ LDFLAGS += -L$(GRPC_LIB)
 LDFLAGS += -lprotobuf
 LDFLAGS += -lssl
 LDFLAGS += -lcrypto
-LDFLAGS += -lcares
 
 
 $(OBJS): %.o:%.cc protobuf grpc proto
