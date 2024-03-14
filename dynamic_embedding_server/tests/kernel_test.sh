@@ -5,7 +5,6 @@ PYTHON=python
 export CUDA_VISIBLE_DEVICES=
 
 TEST_FILES=( \
-  ./python/elastic_partition_op_test.py \
   ./python/redistribution_ops_test.py
 )
 

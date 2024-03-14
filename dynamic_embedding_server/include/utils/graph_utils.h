@@ -273,95 +273,6 @@ Status InitDynamicPartitionGraphMeta(const VarType& var_type, int part_num,
   return Status::OK();
 }
 
-Status MakeElasticPartitionOp(const VarType& var_type,
-                              const Node* dynamic_partition_node, int part_num,
-                              const std::vector<Node*>& gather_node_vec,
-                              Graph* g, Node** elastic_node,
-                              std::unordered_set<Node*>& nodes_to_delete) {
-  string partition_strategy;
-  switch (var_type) {
-    case VarType::EMBEDDING_VAR: {
-      partition_strategy = "bucket";
-      break;
-    }
-    case VarType::REF_VAR: {
-      partition_strategy = "mod";
-      break;
-    }
-    default:
-      return Status::OK();
-  }
-
-  Status s;
-  std::string node_name = dynamic_partition_node->name();
-  DataType key_type;
-  TF_RETURN_IF_ERROR(
-      GetNodeAttr(dynamic_partition_node->attrs(), "T", &key_type));
-  int num_partitions;
-  TF_RETURN_IF_ERROR(GetNodeAttr(dynamic_partition_node->attrs(),
-                                 "num_partitions", &num_partitions));
-  const Node* a_copy;
-  TF_RETURN_IF_ERROR(dynamic_partition_node->input_node(0, &a_copy));
-  const Node* b_copy;
-  TF_RETURN_IF_ERROR(dynamic_partition_node->input_node(1, &b_copy));
-  auto idx = node_name.find(kDynamicPartition);
-  std::string pre_node_name = node_name.substr(0, idx - 1);
-  NodeDef elastic_node_def;
-  TF_RETURN_IF_ERROR(NodeDefBuilder(pre_node_name + "/ElasticPartition",
-                                    ::des::kElasticPartition)
-                         .Input(a_copy->name(), 0, a_copy->output_type(0))
-                         .Input(b_copy->name(), 0, b_copy->output_type(0))
-                         .Attr("num_partitions", part_num)
-                         .Attr("TKey", key_type)
-                         .Attr("partition_strategy", partition_strategy)
-                         .Device(dynamic_partition_node->assigned_device_name())
-                         .Finalize(&elastic_node_def));
-  *elastic_node = g->AddNode(elastic_node_def, &s);
-  TF_RETURN_IF_ERROR(s);
-  (*elastic_node)
-      ->set_assigned_device_name(
-          dynamic_partition_node->assigned_device_name());
-
-  const Edge* input_edge = nullptr;
-  TF_RETURN_IF_ERROR(dynamic_partition_node->input_edge(1, &input_edge));
-  for (auto* o_node : input_edge->src()->out_nodes()) {
-    if (o_node->type_string() == kDynamicPartition) {
-      const Edge* data_input_edge = nullptr;
-      TF_RETURN_IF_ERROR(o_node->input_edge(0, &data_input_edge));
-      if (data_input_edge->src()->type_string() != "Range") {  // ID
-        // Input
-        g->AddEdge(data_input_edge->src(), data_input_edge->src_output(),
-                   *elastic_node, 0);
-        nodes_to_delete.insert(o_node);
-
-      } else {  // Indices
-        // Input
-        g->AddEdge(data_input_edge->src(), data_input_edge->src_output(),
-                   *elastic_node, 1);
-        nodes_to_delete.insert(o_node);
-      }
-    }
-  }
-  if (num_partitions > part_num) {
-    for (int i = 0; i < gather_node_vec.size(); ++i) {
-      TF_RETURN_IF_ERROR(
-          g->UpdateEdge(*elastic_node, i, gather_node_vec[i], 1));
-    }
-  } else {
-    for (int i = 0; i < gather_node_vec.size(); ++i) {
-      if (i < num_partitions) {
-        TF_RETURN_IF_ERROR(
-            g->UpdateEdge(*elastic_node, i, gather_node_vec[i], 1));
-      } else {
-        g->AddEdge(*elastic_node, i, gather_node_vec[i], 1);
-      }
-    }
-  }
-
-  nodes_to_delete.insert(input_edge->src());
-  return s;
-}
-
 Status MakeDynamicPartitionOp(const VarType& var_type,
                               const Node* dynamic_partition_node, int part_num,
                               const std::vector<Node*>& gather_node_vec,
@@ -385,6 +296,7 @@ Status MakeDynamicPartitionOp(const VarType& var_type,
       new_part_nums.flat<int64>()(0) = part_num;
       divisor_node->ClearAttr("value");
       divisor_node->AddAttr("value", new_part_nums);
+      break;
     }
     case VarType::REF_VAR: {
       Node* maximum_node = nullptr;
@@ -412,6 +324,7 @@ Status MakeDynamicPartitionOp(const VarType& var_type,
       TF_RETURN_IF_ERROR(mod_node->input_node(1, &const_node_1));
       const_node_1->ClearAttr("value");
       const_node_1->AddAttr("value", new_part_nums);
+      break;
     }
   }
 

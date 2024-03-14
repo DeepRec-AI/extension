@@ -22,7 +22,6 @@ constexpr char kEvImportOp[] = "KvResourceMulImport";
 constexpr char kEvExportOp[] = "KvResourceFilter";
 constexpr char kReAssign[] = "ReAssign";
 constexpr char kReAssignRes[] = "ReAssignResource";
-constexpr char kElasticPartition[] = "ElasticPartition";
 
 }  // namespace des
 #endif  // DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_NAMING_H_

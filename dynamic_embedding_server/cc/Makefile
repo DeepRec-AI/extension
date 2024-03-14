@@ -124,7 +124,7 @@ $(DES_LIB): $(OBJS) $(CU_OBJS)
 else
 $(DES_LIB): $(OBJS)
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) -std=c++11 \
+	$(CXX) $(CFLAGS) -std=c++11 -Wl,--version-script=dynamic_embedding_server/des.script \
         -o $@ $(PROTO_OBJ) $(OBJS) \
         $(TENSORFLOW_LDFLAGS) $(LDFLAGS)
 endif
