@@ -67,7 +67,13 @@ CC_SOURCES := $(shell \
         -exec realpath {} --relative-to . \;)
 
 OBJS := $(CC_SOURCES:.cc=.o)
-DEPS := $(OBJS:.o=.d)
+
+CU_SOURCES = $(shell \
+		find $(SRC_DIR) -type f \
+		\( -name "*.cu.cc" \) \
+		-exec realpath {} --relative-to . \;)
+
+CU_OBJS := $(CU_SOURCES:.cc=.o)
 
 CXX_CFLAGS += -I$(PROTOBUF_INCLUDE)
 CXX_CFLAGS += -I$(GRPC_INCLUDE)
@@ -75,6 +81,8 @@ CXX_CFLAGS += -I$(GRPC_INCLUDE)
 LDFLAGS += -L$(PROTOBUF_LIB)
 LDFLAGS += -L$(GRPC_LIB)
 LDFLAGS += -lprotobuf
+LDFLAGS += -lgrpc++
+LDFLAGS += -lgrpc
 LDFLAGS += -lssl
 LDFLAGS += -lcrypto
 
@@ -86,25 +94,24 @@ $(OBJS): %.o:%.cc protobuf grpc proto
 	sed -i '/site-packages/d' $<.d
 	sed -i '/^$$/N;/^\n$$/D' $<.d
 
-CU_SOURCES = $(shell \
-	find -type f \
-	\( -name '*.cu.cc' ! -name "*test*" \) \
-	-exec realpath {} --relative-to . \;')
-
 $(CU_OBJS): %.o:%.cc
 	mkdir -p $(dir $@)
-	@$(NVCC) -M $< $(CFLAGS) -x cu \
+	@$(NVCC) -M $< $(CFLAGS) $(TENSORFLOW_CFLAGS) -x cu \
 	 | grep -v '/usr/' \
+	 | grep -v 'site-packages' \
 	 | sed 's|$(notdir $@)|$@|g' \
-	 | sed 's|\./||g' \
+	 | sed 's|^\./||g' \
 	 > $<.d
+	sed -i '/^$$/N;/^\n$$/D' $<.d
 	$(NVCC) \
-		--std=c++11 \
-		--expt-relaxed-constexpr \
-		--expt-extended-lambda \
-		--disable-warnings \
-		-o $@ -c $< $(CFLAGS) -x cu \
-		-Xcompiler -fPIC
+		-o $@ -c $< $(CFLAGS) $(TENSORFLOW_CFLAGS) -x cu \
+		--expt-relaxed-constexpr -Xcompiler -fPIC
+
+ifneq ($(CUDA_CFLAGS),)
+DEPS := $(OBJS:.o=.d) $(CU_OBJS:.o=.d)
+else
+DEPS := $(OBJS:.o=.d)
+endif
 
 -include $(DEPS)
 
@@ -112,7 +119,7 @@ ifneq ($(CUDA_CFLAGS),)
 $(DES_LIB): $(OBJS) $(CU_OBJS)
 	mkdir -p $(dir $@)
 	$(CXX) $(CFLAGS) -std=c++11 \
-        -o $@ $(PROTO_OBJ) $(OBJS)  $(CU_OBJS) \
+        -o $@ $(PROTO_OBJ) $(OBJS) $(CU_OBJS) \
         $(TENSORFLOW_LDFLAGS) $(LDFLAGS) $(CUDA_LDFLAGS)
 else
 $(DES_LIB): $(OBJS)

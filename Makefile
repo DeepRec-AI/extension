@@ -12,12 +12,13 @@ endif
 ifeq ($(GPU_MODE), true)
 $(warning dynamic_embedding_server is building with GPU enabled)
 CUDA_HOME ?= /usr/local/cuda
-CUDA_CFLAGS ?= \
-	-DGOOGLE_CUDA=1 \
-	-I$(CUDA_HOME)/include
+CUDA_CFLAGS ?= -DGOOGLE_CUDA=1 \
+	-I$(CUDA_HOME)/include \
+	-DEIGEN_MPL2_ONLY \
+	-DEIGEN_MAX_ALIGN_BYTES=64 \
+	-DEIGEN_HAS_TYPE_TRAITS=0
 
-CUDA_LDFLAGS ?= \
-	-L$(CUDA_HOME)/lib64 \
+CUDA_LDFLAGS ?= -L$(CUDA_HOME)/lib64 \
 	-lcudart \
 	-L/usr/lib64 \
 	-lnccl

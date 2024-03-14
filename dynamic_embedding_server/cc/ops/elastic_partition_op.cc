@@ -9,6 +9,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 =======================================================================*/
+#include "dynamic_embedding_server/include/utils/naming.h"
 
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/node_def_util.h"
@@ -20,13 +21,14 @@ namespace tensorflow {
 using shape_inference::InferenceContext;
 using shape_inference::ShapeHandle;
 
-REGISTER_OP("ElasticPartition")
+REGISTER_OP(::des::kElasticPartition)
     .Input("data: TKey")
     .Input("indices: int32")
     .Output("p_data: num_partitions * TKey")
     .Output("p_indices: num_partitions * int32")
     .Attr("num_partitions: int")
     .Attr("TKey: {int64, int32}")
+    .Attr("partition_strategy: {'bucket', 'mod', 'div'}")
     .SetShapeFn([](InferenceContext* c) {
       int64 num_partitions;
       TF_RETURN_IF_ERROR(c->GetAttr("num_partitions", &num_partitions));
@@ -44,18 +46,20 @@ REGISTER_OP("ElasticPartition")
       TF_RETURN_IF_ERROR(
           c->Concatenate(unknown_dim0, data_suffix_shape, &result_shape));
 
-      for (int i = 0; i < c->num_outputs(); ++i) {
+      for (int i = 0; i < num_partitions; ++i) {
         c->set_output(i, result_shape);
       }
 
       ShapeHandle indices_shape = c->input(1);
       const int64 id_rank = c->Rank(indices_shape);
       ShapeHandle indices_suffix_shape;
-      TF_RETURN_IF_ERROR(c->Subshape(indices_shape, id_rank, &indices_suffix_shape));
       TF_RETURN_IF_ERROR(
-          c->Concatenate(unknown_dim0, indices_suffix_shape, &result_shape));
-      for (int i = 0; i < c->num_outputs(); ++i) {
-        c->set_output(i + num_partitions, result_shape);
+          c->Subshape(indices_shape, id_rank, &indices_suffix_shape));
+      ShapeHandle indices_result_shape;
+      TF_RETURN_IF_ERROR(c->Concatenate(unknown_dim0, indices_suffix_shape,
+                                        &indices_result_shape));
+      for (int i = 0; i < num_partitions; ++i) {
+        c->set_output(i + num_partitions, indices_result_shape);
       }
 
       return Status::OK();

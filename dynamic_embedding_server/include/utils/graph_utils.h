@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_GRAPH_UTILS_H_
 #define DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_GRAPH_UTILS_H_
 
+#include "dynamic_embedding_server/include/utils/naming.h"
+
 #include "tensorflow/core/common_runtime/optimization_registry.h"
 #include "tensorflow/core/graph/algorithm.h"
 #include "tensorflow/core/graph/graph_constructor.h"
@@ -29,8 +31,11 @@ constexpr char kIdentityOp[] = "Identity";
 constexpr char kVariableOp[] = "VariableV2";
 constexpr char kSaveOp[] = "SaveV3";
 constexpr char kRestoreOp[] = "RestoreV2";
+constexpr char kWorkerSyncOp[] = "worker_sync";
 
 namespace tensorflow {
+
+typedef std::pair<int, Node*> DeviceIdToNode;
 
 inline string NewDevice(Node* node, int i) {
   DeviceNameUtils::ParsedName full_device_name;
@@ -114,9 +119,6 @@ Status ChangeResShape(Node* res_node, TensorShape& new_shape,
     new_part_shape = part_var_full_shape / cur_partition_nums;
   }
 
-  LOG(INFO) << "new shape" << part_var_full_shape << "new is "
-            << new_part_shape;
-
   new_shape = TensorShape({new_part_shape});
   if (tensor_size > 1) {
     for (int j = 1; j < tensor_size; ++j) {
@@ -138,6 +140,7 @@ Status MakeConstInitializer(Graph* g, Node* new_init_op,
   TF_RETURN_IF_ERROR(NodeDefBuilder(new_init_op->name() + "/Const", "Const")
                          .Attr("dtype", DT_FLOAT)
                          .Attr("value", init_tensor)
+                         .Device(new_device_name)
                          .Finalize(&init_value_def));
   Node* new_const_init = g->AddNode(init_value_def, &s);
   TF_RETURN_IF_ERROR(s);
@@ -147,7 +150,7 @@ Status MakeConstInitializer(Graph* g, Node* new_init_op,
 }
 
 Status InitDynamicPartitionGraphMeta(const VarType& var_type, int part_num,
-                                     const std::vector<Node*>& ev_node_vec,
+                                     PartIdToNodeMap& ev_node_vec,
                                      std::vector<Node*>& gather_node_vec,
                                      std::vector<Node*>& identity_node_vec,
                                      Node** dynamic_partition_node,
@@ -251,10 +254,25 @@ Status InitDynamicPartitionGraphMeta(const VarType& var_type, int part_num,
   return Status::OK();
 }
 
-Status MakeElasticPartitionOp(const Node* dynamic_partition_node, int part_num,
+Status MakeElasticPartitionOp(const VarType& var_type,
+                              const Node* dynamic_partition_node, int part_num,
                               const std::vector<Node*>& gather_node_vec,
                               Graph* g, Node** elastic_node,
                               std::unordered_set<Node*>& nodes_to_delete) {
+  string partition_strategy;
+  switch (var_type) {
+    case VarType::EMBEDDING_VAR: {
+      partition_strategy = "bucket";
+      break;
+    }
+    case VarType::REF_VAR: {
+      partition_strategy = "mod";
+      break;
+    }
+    default:
+      return Status::OK();
+  }
+
   Status s;
   std::string node_name = dynamic_partition_node->name();
   DataType key_type;
@@ -270,13 +288,15 @@ Status MakeElasticPartitionOp(const Node* dynamic_partition_node, int part_num,
   auto idx = node_name.find(kDynamicPartition);
   std::string pre_node_name = node_name.substr(0, idx - 1);
   NodeDef elastic_node_def;
-  TF_RETURN_IF_ERROR(
-      NodeDefBuilder(pre_node_name + "/ElasticPartition", "ElasticPartition")
-          .Input(a_copy->name(), 0, a_copy->output_type(0))
-          .Input(b_copy->name(), 0, b_copy->output_type(0))
-          .Attr("num_partitions", part_num)
-          .Attr("TKey", key_type)
-          .Finalize(&elastic_node_def));
+  TF_RETURN_IF_ERROR(NodeDefBuilder(pre_node_name + "/ElasticPartition",
+                                    ::des::kElasticPartition)
+                         .Input(a_copy->name(), 0, a_copy->output_type(0))
+                         .Input(b_copy->name(), 0, b_copy->output_type(0))
+                         .Attr("num_partitions", part_num)
+                         .Attr("TKey", key_type)
+                         .Attr("partition_strategy", partition_strategy)
+                         .Device(dynamic_partition_node->assigned_device_name())
+                         .Finalize(&elastic_node_def));
   *elastic_node = g->AddNode(elastic_node_def, &s);
   TF_RETURN_IF_ERROR(s);
   (*elastic_node)
@@ -303,17 +323,95 @@ Status MakeElasticPartitionOp(const Node* dynamic_partition_node, int part_num,
       }
     }
   }
-
-  for (int i = 0; i < gather_node_vec.size(); ++i) {
-    if (i < part_num) {
+  if (num_partitions > part_num) {
+    for (int i = 0; i < gather_node_vec.size(); ++i) {
       TF_RETURN_IF_ERROR(
           g->UpdateEdge(*elastic_node, i, gather_node_vec[i], 1));
-    } else {
-      g->AddEdge(*elastic_node, i, gather_node_vec[i], 1);
+    }
+  } else {
+    for (int i = 0; i < gather_node_vec.size(); ++i) {
+      if (i < num_partitions) {
+        TF_RETURN_IF_ERROR(
+            g->UpdateEdge(*elastic_node, i, gather_node_vec[i], 1));
+      } else {
+        g->AddEdge(*elastic_node, i, gather_node_vec[i], 1);
+      }
     }
   }
 
   nodes_to_delete.insert(input_edge->src());
+  return s;
+}
+
+Status MakeDynamicPartitionOp(const VarType& var_type,
+                              const Node* dynamic_partition_node, int part_num,
+                              const std::vector<Node*>& gather_node_vec,
+                              Graph* g, Node** data_dp_node,
+                              Node** indices_dp_node,
+                              std::unordered_set<Node*>& nodes_to_delete) {
+  Status s;
+  std::string node_name = dynamic_partition_node->name();
+  int num_partitions;
+  TF_RETURN_IF_ERROR(GetNodeAttr(dynamic_partition_node->attrs(),
+                                 "num_partitions", &num_partitions));
+
+  const Edge* input_edge = nullptr;
+  TF_RETURN_IF_ERROR(dynamic_partition_node->input_edge(1, &input_edge));
+  Node* floormod_node = nullptr;
+  TF_RETURN_IF_ERROR(input_edge->src()->input_node(0, &floormod_node));
+  Node* divisor_node = nullptr;
+  TF_RETURN_IF_ERROR(floormod_node->input_node(1, &divisor_node));
+  Tensor new_part_nums(DT_INT64, TensorShape({}));
+  new_part_nums.flat<int64>()(0) = part_num;
+  divisor_node->ClearAttr("value");
+  divisor_node->AddAttr("value", new_part_nums);
+
+  for (auto* o_node : input_edge->src()->out_nodes()) {
+    if (o_node->type_string() == kDynamicPartition) {
+      const Edge* data_input_edge = nullptr;
+      TF_RETURN_IF_ERROR(o_node->input_edge(0, &data_input_edge));
+      if (data_input_edge->src()->type_string() != "Range") {  // ID
+        // Input
+        *data_dp_node = CopyNode(g, dynamic_partition_node,
+                                 dynamic_partition_node->assigned_device_name(),
+                                 0, "DES/" + dynamic_partition_node->name());
+        (*data_dp_node)->ClearAttr("num_partitions");
+        (*data_dp_node)->AddAttr("num_partitions", part_num);
+        g->AddEdge(data_input_edge->src(), data_input_edge->src_output(),
+                   *data_dp_node, 0);
+        g->AddEdge(input_edge->src(), input_edge->src_output(), *data_dp_node,
+                   1);
+        nodes_to_delete.insert(o_node);
+
+      } else {  // Indices
+        *indices_dp_node = CopyNode(g, o_node, o_node->assigned_device_name(),
+                                    0, "DES/" + o_node->name());
+        (*indices_dp_node)->ClearAttr("num_partitions");
+        (*indices_dp_node)->AddAttr("num_partitions", part_num);
+        g->AddEdge(data_input_edge->src(), data_input_edge->src_output(),
+                   *indices_dp_node, 0);
+        g->AddEdge(input_edge->src(), input_edge->src_output(),
+                   *indices_dp_node, 1);
+        nodes_to_delete.insert(o_node);
+      }
+    }
+  }
+  if (num_partitions > part_num) {
+    for (int i = 0; i < gather_node_vec.size(); ++i) {
+      TF_RETURN_IF_ERROR(
+          g->UpdateEdge(*data_dp_node, i, gather_node_vec[i], 1));
+    }
+  } else {
+    for (int i = 0; i < gather_node_vec.size(); ++i) {
+      if (i < num_partitions) {
+        TF_RETURN_IF_ERROR(
+            g->UpdateEdge(*data_dp_node, i, gather_node_vec[i], 1));
+      } else {
+        g->AddEdge(*data_dp_node, i, gather_node_vec[i], 1);
+      }
+    }
+  }
+
   return s;
 }
 
@@ -368,7 +466,6 @@ Status UpdateOldBackWardGraph(const VarType& var_type,
           Node* gather_node;
           TF_RETURN_IF_ERROR(
               control_dependency_node->input_node(0, &gather_node));
-          // embedding lookup sparse has extra identity node
           TF_RETURN_IF_ERROR(
               g->UpdateEdge(elastic_node, part_num + i, gather_node, 1));
         }
@@ -382,8 +479,8 @@ Status MakeSparseApplyOp(
     Graph* g, const Node* old_apply_node, Node* elastic_node,
     Node* cur_noop_node, const std::string& primary_ev_name,
     const std::vector<std::string>& opt_ev_names, const string& new_device_name,
-    std::unordered_map<std::string, std::vector<Node*>>& node_to_origin_map,
-    int i, int cur_partition_nums) {
+    std::unordered_map<std::string, PartIdToNodeMap>& node_to_origin_map, int i,
+    int cur_partition_nums) {
   Node* new_apply_node = CopyNode(g, old_apply_node, new_device_name, i);
   g->AddControlEdge(new_apply_node, cur_noop_node);
   g->AddEdge(node_to_origin_map[primary_ev_name][i], 0, new_apply_node, 0);
@@ -411,6 +508,13 @@ Status MakeSparseApplyOp(
           Node* new_record_sparse = CopyNode(g, o_node, new_device_name, i);
           g->AddEdge(new_reshape_id, 0, new_record_sparse, 0);
           g->AddControlEdge(new_record_sparse, cur_noop_node);
+          for (auto* o_edge : o_node->out_edges()) {
+            if (o_edge->IsControlEdge() &&
+                o_edge->dst()->type_string() != "NoOp") {
+              g->AddControlEdge(new_record_sparse, o_edge->dst());
+              g->AddControlEdge(new_apply_node, o_edge->dst());
+            }
+          }
         }
       }
 
@@ -564,7 +668,8 @@ Status MakeSparseApplyOp(
 Status UpdateOldDenseBackWardGraph(VarType var_type, Graph* g,
                                    Node* dense_variable_node,
                                    int part_var_full_shape, int i,
-                                   int cur_partition_nums) {
+                                   int cur_partition_nums,
+                                   int ev_partition_num) {
   for (auto* node : dense_variable_node->out_nodes()) {
     if (IsApplyNode(var_type, node)) {
       Node* i_node;
@@ -578,14 +683,12 @@ Status UpdateOldDenseBackWardGraph(VarType var_type, Graph* g,
         TF_RETURN_IF_ERROR(
             GetNodeAttr(shape_node->attrs(), "value", &old_shape_tensor));
         int tensor_size = old_shape_tensor.NumElements();
-        int new_part_shape;
-        if (i != cur_partition_nums - 1) {
-          new_part_shape = part_var_full_shape / cur_partition_nums;
-        } else {
-          new_part_shape = part_var_full_shape - part_var_full_shape /
-                                                     cur_partition_nums *
-                                                     (cur_partition_nums - 1);
+        int partition_shape = part_var_full_shape / cur_partition_nums;
+        int remainder = part_var_full_shape % cur_partition_nums;
+        if (remainder > i) {
+          partition_shape += 1;
         }
+        int new_part_shape = partition_shape;
         Tensor shape_tensor;
         TensorProto tensor_shape_proto;
         tensor_shape_proto.set_dtype(DT_INT32);
@@ -602,6 +705,11 @@ Status UpdateOldDenseBackWardGraph(VarType var_type, Graph* g,
         shape_node->ClearAttr("value");
         shape_node->AddAttr("value", shape_tensor);
 
+        LOG(INFO) << "new_part_shape is: " << shape_tensor.DebugString()
+                  << " apply node name is: " << node->name()
+                  << " dense_variable_node name is: "
+                  << dense_variable_node->name();
+
         const Edge* concat_offset_edge;
         TF_RETURN_IF_ERROR(
             concat_grad_node->input_edge(1, &concat_offset_edge));
@@ -611,11 +719,21 @@ Status UpdateOldDenseBackWardGraph(VarType var_type, Graph* g,
             target_edge = o_edge;
           }
         }
+        int part_num;
+        TF_RETURN_IF_ERROR(
+            GetNodeAttr(concat_offset_edge->src()->attrs(), "N", &part_num));
+
+        if (part_num != cur_partition_nums) {
+          concat_offset_edge->src()->ClearAttr("N");
+          concat_offset_edge->src()->AddAttr("N", cur_partition_nums);
+        }
+
         g->RemoveEdge(target_edge);
         g->AddEdge(shape_node, 0, concat_offset_edge->src(), i + 1);
         // concat offset grad
         if (concat_offset_edge->src_output() != i) {
-          g->UpdateEdge(concat_offset_edge->src(), i, concat_grad_node, 1);
+          TF_RETURN_IF_ERROR(
+              g->UpdateEdge(concat_offset_edge->src(), i, concat_grad_node, 1));
         }
       }
     }
@@ -623,11 +741,19 @@ Status UpdateOldDenseBackWardGraph(VarType var_type, Graph* g,
   return Status::OK();
 }
 
-Status MakeNoOp(Graph* g, Node* cur_noop_node, Node* cur_apply_node,
+Status MakeNoOp(Graph* g, Node** cur_noop_node, Node* cur_apply_node,
                 const string& new_device_name, std::vector<Node*>& no_op_vec,
                 int i) {
   Status s;
-  if (cur_noop_node == nullptr) {
+  if (*cur_noop_node == nullptr) {
+    for (auto* node : g->op_nodes()) {
+      if (node->name() == "head/Optimizer/update/NoOp_" + std::to_string(i)) {
+        *cur_noop_node = node;
+        no_op_vec[i] = node;
+        return s;
+      }
+    }
+
     NodeDef noop_def;
     TF_RETURN_IF_ERROR(
         NodeDefBuilder("head/Optimizer/update/NoOp_" + std::to_string(i),
@@ -643,7 +769,7 @@ Status MakeNoOp(Graph* g, Node* cur_noop_node, Node* cur_apply_node,
         }
       }
     }
-    cur_noop_node = no_node;
+    *cur_noop_node = no_node;
     no_op_vec[i] = no_node;
   }
   return s;
@@ -654,8 +780,8 @@ Status MakeApplyOp(
     const std::string& primary_ev_name,
     const std::vector<std::string>& opt_ev_names,
     const std::string& new_device_name,
-    std::unordered_map<std::string, std::vector<Node*>>& node_to_origin_map,
-    int i, int cur_partition_nums, int part_var_full_shape) {
+    std::unordered_map<std::string, PartIdToNodeMap>& node_to_origin_map, int i,
+    int cur_partition_nums, int part_var_full_shape) {
   Node* new_apply_node = CopyNode(g, old_apply_node, new_device_name, i);
   g->AddControlEdge(new_apply_node, cur_noop_node);
   g->AddEdge(node_to_origin_map[primary_ev_name][i], 0, new_apply_node, 0);
@@ -702,26 +828,25 @@ Status MakeApplyOp(
     int tensor_size = old_shape_tensor.NumElements();
     Node* new_shape_node =
         CopyNode(g, shape_node, shape_node->assigned_device_name(), i);
-    if (i == cur_partition_nums - 1) {
-      int new_part_shape = part_var_full_shape - part_var_full_shape /
-                                                     cur_partition_nums *
-                                                     (cur_partition_nums - 1);
-      Tensor shape_tensor;
-      TensorProto tensor_shape_proto;
-      tensor_shape_proto.set_dtype(DT_INT32);
-      TensorShape({tensor_size})
-          .AsProto(tensor_shape_proto.mutable_tensor_shape());
-      tensor_shape_proto.add_int_val(new_part_shape);
-      if (tensor_size > 1) {
-        for (int j = 1; j < tensor_size; ++j) {
-          tensor_shape_proto.add_int_val(old_shape_tensor.flat<int>()(j));
-        }
-      }
-      bool ret = shape_tensor.FromProto(tensor_shape_proto);
-      if (!ret) return errors::Internal("shape tensor init error");
-      new_shape_node->ClearAttr("value");
-      new_shape_node->AddAttr("value", shape_tensor);
+    int new_part_shape = part_var_full_shape / cur_partition_nums;
+    if (part_var_full_shape % cur_partition_nums > i) {
+      new_part_shape += 1;
     }
+    Tensor shape_tensor;
+    TensorProto tensor_shape_proto;
+    tensor_shape_proto.set_dtype(DT_INT32);
+    TensorShape({tensor_size})
+        .AsProto(tensor_shape_proto.mutable_tensor_shape());
+    tensor_shape_proto.add_int_val(new_part_shape);
+    if (tensor_size > 1) {
+      for (int j = 1; j < tensor_size; ++j) {
+        tensor_shape_proto.add_int_val(old_shape_tensor.flat<int>()(j));
+      }
+    }
+    bool ret = shape_tensor.FromProto(tensor_shape_proto);
+    if (!ret) return errors::Internal("shape tensor init error");
+    new_shape_node->ClearAttr("value");
+    new_shape_node->AddAttr("value", shape_tensor);
     g->AddEdge(new_shape_node, 0, concat_offset_node, i + 1);
     g->AddEdge(new_shape_node, 0, new_concat_grad_node, 2);
     // TODO grad value size
@@ -855,7 +980,7 @@ Status DeleteSparseBackWardGraph(VarType var_type, Node* cur_ev_node,
   return Status::OK();
 }
 
-Status DeleteDenseBackWardGraph(VarType var_type, Node* cur_var_node,
+Status DeleteDenseBackWardGraph(VarType var_type, Graph* g, Node* cur_var_node,
                                 int cur_partition_nums,
                                 std::unordered_set<Node*>& nodes_to_delete) {
   for (auto* node : cur_var_node->out_nodes()) {
@@ -874,85 +999,33 @@ Status DeleteDenseBackWardGraph(VarType var_type, Node* cur_var_node,
         Node* prev_grad_node;
         TF_RETURN_IF_ERROR(concat_grad_node->input_node(0, &prev_grad_node));
 
-        Node* concat_offset_node;
-        TF_RETURN_IF_ERROR(
-            concat_grad_node->input_node(1, &concat_offset_node));
-        int part_num;
-        TF_RETURN_IF_ERROR(
-            GetNodeAttr(concat_offset_node->attrs(), "N", &part_num));
         Node* shape_node;
         TF_RETURN_IF_ERROR(concat_grad_node->input_node(2, &shape_node));
+        LOG(INFO) << shape_node->name() << " DELETE";
         nodes_to_delete.insert(shape_node);
-        if (part_num != cur_partition_nums) {
-          concat_offset_node->ClearAttr("N");
-          concat_offset_node->AddAttr("N", cur_partition_nums);
-        }
       }
     }
   }
   return Status::OK();
 }
 
-Status GetPartVariableShape(
-    std::unordered_map<std::string, PartitionVarMeta>& primary_node_metas_map,
-    Node* save_node,
-    std::unordered_map<string, std::vector<int64>>& variable_shape,
-    int cur_partition_nums) {
-  Node* tensor_name_node;
-  TF_RETURN_IF_ERROR(save_node->input_node(1, &tensor_name_node));
-  Tensor tensor_name_t;
-  TF_RETURN_IF_ERROR(
-      GetNodeAttr(tensor_name_node->attrs(), "value", &tensor_name_t));
-  Node* shape_and_slice_node;
-  TF_RETURN_IF_ERROR(save_node->input_node(2, &shape_and_slice_node));
-  Tensor shape_and_slice_t;
-  TF_RETURN_IF_ERROR(
-      GetNodeAttr(shape_and_slice_node->attrs(), "value", &shape_and_slice_t));
-
-  for (int k = 0; k < tensor_name_t.dim_size(0); ++k) {
-    string tensor_n = tensor_name_t.flat<tstring>()(k);
-    auto it = primary_node_metas_map.find(tensor_n);
-    if (it == primary_node_metas_map.end()) continue;
-    auto is_ev = it->second.m_var_type == VarType::EMBEDDING_VAR;
-    if (!is_ev) {
-      auto s_and_s_s = shape_and_slice_t.flat<tstring>()(k);
-      std::vector<string> splits = str_util::Split(s_and_s_s, ' ');
-      if (splits.size() < 2) {
-        LOG(ERROR)
-            << "Need least two elements in shape_and_slice specification: ";
-      }
-      std::vector<string> items =
-          str_util::Split(splits.back(), ':', str_util::SkipEmpty());
-      std::vector<int64> shape_vec(items.size() * 2, 1);
-      for (int j = 0; j < items.size(); ++j) {
-        int64 dim;
-        if (!strings::safe_strto64(splits[j], &dim)) {
-          LOG(ERROR) << "Non numerical dimension in shape_and_slice: ";
-        }
-        // partition_idx
-        if (j == 0) {
-          shape_vec[j] = dim;
-          if (it->second.m_partition_num == 1) {
-            shape_vec[j + items.size()] = dim;
-          } else {
-            shape_vec[j + items.size()] = dim / cur_partition_nums;
-          }
-        } else {
-          shape_vec[j] = dim;
-          shape_vec[j + items.size()] = dim;
-        }
-      }
-      variable_shape.emplace(tensor_n, std::move(shape_vec));
-      LOG(INFO) << "variable_shape name: " << tensor_n;
+void InitPartVariableShape(std::unordered_map<std::string, PartitionedVariable>&
+                               primary_node_metas_map,
+                           std::unordered_map<string, std::vector<int64>>&
+                               partitioned_variable_shape) {
+  for (auto& it : primary_node_metas_map) {
+    PartitionedVariable partition_var = it.second;
+    for (auto& map_it : partition_var.node_map) {
+      partitioned_variable_shape.emplace(std::pair<string, std::vector<int64>>(
+          map_it.first, std::vector<int64>{}));
     }
   }
-  return Status::OK();
 }
 
 Status ScalingSaverSaverNodeUtil(
     Graph* g, Node* ori_save_node, int i,
-    std::unordered_map<std::string, PartitionVarMeta>& primary_node_metas_map,
-    std::unordered_map<std::string, std::vector<Node*>>& node_to_origin_map,
+    std::unordered_map<std::string, PartitionedVariable>&
+        primary_node_metas_map,
     string& assigned_device_name, bool& has_ev,
     std::vector<Node*>& kv_lookup_resource_node_vec,
     std::vector<string>& ev_names_vec, std::vector<DataType>& key_data_types,
@@ -962,11 +1035,8 @@ Status ScalingSaverSaverNodeUtil(
     std::vector<DataType>& n_dtypes) {
   Status s;
   for (auto& it : primary_node_metas_map) {
-    auto ev_node = node_to_origin_map[it.first][i];
-    bool is_ev = it.second.m_var_type == VarType::EMBEDDING_VAR;
-
-    if (assigned_device_name == "")
-      assigned_device_name = ev_node->assigned_device_name();
+    auto ev_node = it.second.node_map[it.first][i];
+    bool is_ev = it.second.var_type == VarType::EMBEDDING_VAR;
     if (is_ev) {
       has_ev = true;
       DataType key_type, value_type;
@@ -979,12 +1049,12 @@ Status ScalingSaverSaverNodeUtil(
               .Input(ev_node->name(), 0, ev_node->output_type(0))
               .Attr("Tkeys", key_type)
               .Attr("dtype", value_type)
-              .Device(ev_node->assigned_device_name())
+              .Device(assigned_device_name)
               .Finalize(&kv_lookup_resource_node_def));
       Node* kv_lookup_resource_node =
           g->AddNode(kv_lookup_resource_node_def, &s);
       TF_RETURN_IF_ERROR(s);
-
+      kv_lookup_resource_node->set_assigned_device_name(assigned_device_name);
       kv_lookup_resource_node_vec.emplace_back(kv_lookup_resource_node);
       ev_names_vec.emplace_back(ev_node->name());
       key_data_types.emplace_back(key_type);
@@ -1024,7 +1094,6 @@ Status ScalingSaverSaverNodeUtil(
     DataType t_type;
     TF_RETURN_IF_ERROR(GetNodeAttr(tensor->attrs(), "T", &t_type));
     n_dtypes.emplace_back(t_type);
-    LOG(INFO) << "tensor_name: " << tensor->name();
   }
   return s;
 }
@@ -1032,8 +1101,8 @@ Status ScalingSaverSaverNodeUtil(
 Status AddNewSaverGraph(
     Graph* g, bool& has_ev, Node** new_sharded_filename,
     std::vector<string>& tensor_names_vec, std::vector<DataType>& n_dtypes,
-    std::unordered_map<std::string, PartitionVarMeta>& primary_node_metas_map,
-    std::unordered_map<std::string, std::vector<Node*>>& node_to_origin_map,
+    std::unordered_map<std::string, PartitionedVariable>&
+        primary_node_metas_map,
     std::unordered_map<string, std::vector<int64>>& variable_shape,
     std::vector<Node*>& restore_tensor_vec, std::string& assigned_device_name,
     std::vector<Node*>& save_node_vec, int i, int cur_partition_nums) {
@@ -1045,11 +1114,10 @@ Status AddNewSaverGraph(
   std::vector<DataType> key_data_types;
   std::vector<NodeDefBuilder::NodeOut> tensors_input;
   TF_RETURN_IF_ERROR(ScalingSaverSaverNodeUtil(
-      g, ori_save_node, i, primary_node_metas_map, node_to_origin_map,
-      assigned_device_name, has_ev, kv_lookup_resource_node_vec, ev_names_vec,
-      key_data_types, tensor_names_vec, restore_tensor_vec, tensor_vec,
-      tensors_input, n_dtypes));
-
+      g, ori_save_node, i, primary_node_metas_map, assigned_device_name, has_ev,
+      kv_lookup_resource_node_vec, ev_names_vec, key_data_types,
+      tensor_names_vec, restore_tensor_vec, tensor_vec, tensors_input,
+      n_dtypes));
   Status s;
   Node* tensor_name_node;
   Node* shape_slice_node;
@@ -1103,7 +1171,8 @@ Status AddNewSaverGraph(
     for (int j = 0; j < tensor_names_vec.size(); ++j) {
       tensor_name_proto.add_string_val(tensor_names_vec[j]);
     }
-    new_tensor_names.FromProto(tensor_name_proto);
+    bool ret = new_tensor_names.FromProto(tensor_name_proto);
+    if (!ret) return errors::Internal("tensor_name tensor init error");
     NodeDef tensor_name_node_def;
     TF_RETURN_IF_ERROR(NodeDefBuilder(ori_save_node->name() + "_" +
                                           std::to_string(i) + "/tensor_names",
@@ -1113,12 +1182,12 @@ Status AddNewSaverGraph(
                            .Device(assigned_device_name)
                            .Finalize(&tensor_name_node_def));
     tensor_name_node = g->AddNode(tensor_name_node_def, &s);
+    tensor_name_node->set_assigned_device_name(assigned_device_name);
     TF_RETURN_IF_ERROR(s);
 
     std::vector<string> new_tensor_shape_vec;
     for (int j = 0; j < tensor_names_vec.size(); ++j) {
       string tensor_n = tensor_names_vec[j];
-      LOG(INFO) << "cur tensor_n is : " << tensor_n;
       auto it = variable_shape.find(tensor_n);
       if (it != variable_shape.end()) {
         string tmp_shape_and_slice = "";
@@ -1132,11 +1201,9 @@ Status AddNewSaverGraph(
           // partition_idx
           if (j == 0) {
             int64 low = i * shape_and_slice[j + shape_and_slice.size() / 2];
-            int64 high;
-            if (i == cur_partition_nums - 1) {
-              high = shape_and_slice[j] - low;
-            } else {
-              high = shape_and_slice[j + shape_and_slice.size() / 2];
+            int64 high = shape_and_slice[j + shape_and_slice.size() / 2];
+            if (shape_and_slice[j] % cur_partition_nums > i) {
+              high += 1;
             }
             tmp_dim.emplace_back(std::to_string(low) + "," +
                                  std::to_string(high));
@@ -1148,12 +1215,11 @@ Status AddNewSaverGraph(
           }
         }
         tmp_shape_and_slice += str_util::Join(tmp_dim, ":");
-        LOG(INFO) << "tmp_shape_and_slice is: " << tmp_shape_and_slice;
         tensor_shape_proto.add_string_val(tmp_shape_and_slice);
       }
     }
-    new_tensor_shape.FromProto(tensor_shape_proto);
-    LOG(INFO) << " processing shape_slice_node...";
+    ret = new_tensor_shape.FromProto(tensor_shape_proto);
+    if (!ret) return errors::Internal("tensor_name tensor init error");
     NodeDef shape_slice_node_def;
     TF_RETURN_IF_ERROR(NodeDefBuilder(ori_save_node->name() + "_" +
                                           std::to_string(i) +
@@ -1164,11 +1230,11 @@ Status AddNewSaverGraph(
                            .Device(assigned_device_name)
                            .Finalize(&shape_slice_node_def));
     shape_slice_node = g->AddNode(shape_slice_node_def, &s);
+    shape_slice_node->set_assigned_device_name(assigned_device_name);
     TF_RETURN_IF_ERROR(s);
   }
 
   {
-    LOG(INFO) << " processing ev_name_node...";
     // ev_names
     NodeDef ev_name_node_def;
     Tensor ev_names_tensor;
@@ -1179,7 +1245,8 @@ Status AddNewSaverGraph(
     for (int k = 0; k < ev_names_vec.size(); ++k) {
       ev_names_proto.add_string_val(ev_names_vec[k]);
     }
-    ev_names_tensor.FromProto(ev_names_proto);
+    bool ret = ev_names_tensor.FromProto(ev_names_proto);
+    if (!ret) return errors::Internal("tensor_name tensor init error");
     TF_RETURN_IF_ERROR(NodeDefBuilder(ori_save_node->name() + "_" +
                                           std::to_string(i) + "/ev_names",
                                       "Const")
@@ -1188,11 +1255,11 @@ Status AddNewSaverGraph(
                            .Device(assigned_device_name)
                            .Finalize(&ev_name_node_def));
     ev_name_node = g->AddNode(ev_name_node_def, &s);
+    ev_name_node->set_assigned_device_name(assigned_device_name);
     TF_RETURN_IF_ERROR(s);
   }
 
   {
-    LOG(INFO) << " processing kv_lookup_resource_node...";
     std::vector<NodeDefBuilder::NodeOut> kv_lookup_resource_input;
     for (auto* n : kv_lookup_resource_node_vec) {
       kv_lookup_resource_input.emplace_back(n->name(), 0, n->output_type(0));
@@ -1212,6 +1279,7 @@ Status AddNewSaverGraph(
                              .Device(assigned_device_name)
                              .Finalize(&const_node_def));
       kv_lookup_resource_node = g->AddNode(const_node_def, &s);
+      kv_lookup_resource_node->set_assigned_device_name(assigned_device_name);
       TF_RETURN_IF_ERROR(s);
     } else {
       key_type = key_data_types[0];
@@ -1228,47 +1296,54 @@ Status AddNewSaverGraph(
                              .Device(assigned_device_name)
                              .Finalize(&kv_lookup_resource_node_def));
       kv_lookup_resource_node = g->AddNode(kv_lookup_resource_node_def, &s);
+      kv_lookup_resource_node->set_assigned_device_name(assigned_device_name);
       TF_RETURN_IF_ERROR(s);
     }
   }
-  // tensor_names
-  NodeDef save_node_def;
-  TF_RETURN_IF_ERROR(
-      NodeDefBuilder(ori_save_node->name() + "_" + std::to_string(i), kSaveOp)
-          .Input((*new_sharded_filename)->name(), 0,
-                 (*new_sharded_filename)->output_type(0))
-          .Input(tensor_name_node->name(), 0, tensor_name_node->output_type(0))
-          .Input(shape_slice_node->name(), 0, shape_slice_node->output_type(0))
-          .Input(ev_name_node->name(), 0, ev_name_node->output_type(0))
-          .Input(kv_lookup_resource_node->name(), 0,
-                 kv_lookup_resource_node->output_type(0))
-          .Input(tensors_input)
-          .Attr("dtypes", n_dtypes)
-          .Attr("ev_key_types", ev_dtypes)
-          .Attr("has_ev", has_ev)
-          .Finalize(&save_node_def));
-  Node* save_node = g->AddNode(save_node_def, &s);
-  TF_RETURN_IF_ERROR(s);
-  save_node->set_assigned_device_name(assigned_device_name);
+  if (n_dtypes.size() > 0) {
+    // tensor_names
+    NodeDef save_node_def;
+    TF_RETURN_IF_ERROR(
+        NodeDefBuilder(ori_save_node->name() + "_" + std::to_string(i), kSaveOp)
+            .Input((*new_sharded_filename)->name(), 0,
+                   (*new_sharded_filename)->output_type(0))
+            .Input(tensor_name_node->name(), 0,
+                   tensor_name_node->output_type(0))
+            .Input(shape_slice_node->name(), 0,
+                   shape_slice_node->output_type(0))
+            .Input(ev_name_node->name(), 0, ev_name_node->output_type(0))
+            .Input(kv_lookup_resource_node->name(), 0,
+                   kv_lookup_resource_node->output_type(0))
+            .Input(tensors_input)
+            .Attr("ev_key_types", ev_dtypes)
+            .Attr("has_ev", has_ev)
+            .Attr("dtypes", n_dtypes)
+            .Device(assigned_device_name)
+            .Finalize(&save_node_def));
+    Node* save_node = g->AddNode(save_node_def, &s);
+    TF_RETURN_IF_ERROR(s);
+    save_node->set_assigned_device_name(assigned_device_name);
 
-  for (auto* o_edge : ori_save_node->out_edges()) {
-    if (o_edge->IsControlEdge()) {
-      Node* save_control_node =
-          CopyNode(g, o_edge->dst(), assigned_device_name, i);
-      g->AddEdge(*new_sharded_filename, 0, save_control_node, 0);
-      g->AddControlEdge(save_node, save_control_node);
-      for (auto* oo_edge : o_edge->dst()->out_edges()) {
-        if (oo_edge->IsControlEdge()) {
-          auto* dst_node = oo_edge->dst();
-          g->AddControlEdge(save_control_node, dst_node);
-          if (dst_node->type_string() == "Pack") {
-            int part_num;
-            TF_RETURN_IF_ERROR(GetNodeAttr(dst_node->attrs(), "N", &part_num));
-            if (part_num != cur_partition_nums) {
-              dst_node->ClearAttr("N");
-              dst_node->AddAttr("N", cur_partition_nums);
+    for (auto* o_edge : ori_save_node->out_edges()) {
+      if (o_edge->IsControlEdge()) {
+        Node* save_control_node =
+            CopyNode(g, o_edge->dst(), assigned_device_name, i);
+        g->AddEdge(*new_sharded_filename, 0, save_control_node, 0);
+        g->AddControlEdge(save_node, save_control_node);
+        for (auto* oo_edge : o_edge->dst()->out_edges()) {
+          if (oo_edge->IsControlEdge()) {
+            auto* dst_node = oo_edge->dst();
+            g->AddControlEdge(save_control_node, dst_node);
+            if (dst_node->type_string() == "Pack") {
+              int part_num;
+              TF_RETURN_IF_ERROR(
+                  GetNodeAttr(dst_node->attrs(), "N", &part_num));
+              if (part_num != cur_partition_nums) {
+                dst_node->ClearAttr("N");
+                dst_node->AddAttr("N", cur_partition_nums);
+              }
+              g->AddEdge(*new_sharded_filename, 0, dst_node, i);
             }
-            g->AddEdge(*new_sharded_filename, 0, dst_node, i);
           }
         }
       }
@@ -1280,12 +1355,11 @@ Status AddNewSaverGraph(
 Status AddNewRestoreGraph(
     Graph* g, bool has_ev, int i, int cur_partition_nums,
     const Node* new_sharded_filename,
-    const std::vector<string>& tensor_names_vec, 
+    const std::vector<string>& tensor_names_vec,
     const std::unordered_map<string, std::vector<int64>>& variable_shape,
     const std::vector<Node*>& restore_tensor_vec,
     const std::vector<Node*>& restore_node_vec,
-    const std::string& assigned_device_name,
-    std::vector<DataType>& n_dtypes) {
+    const std::string& assigned_device_name, std::vector<DataType>& n_dtypes) {
   Status s;
   Node* ori_restore_node = restore_node_vec[0];
   Node* restore_tensor_name_node;
@@ -1304,13 +1378,15 @@ Status AddNewRestoreGraph(
     for (int j = 0; j < tensor_names_vec.size(); ++j) {
       tensor_name_proto.add_string_val(tensor_names_vec[j]);
     }
-    new_tensor_names.FromProto(tensor_name_proto);
+    bool ret = new_tensor_names.FromProto(tensor_name_proto);
+    if (!ret) return errors::Internal("tensor_name tensor init error");
     NodeDef tensor_name_node_def;
     TF_RETURN_IF_ERROR(NodeDefBuilder(ori_restore_node->name() + "_" +
                                           std::to_string(i) + "/tensor_names",
                                       "Const")
                            .Attr("value", new_tensor_names)
                            .Attr("dtype", DT_STRING)
+                           .Device(assigned_device_name)
                            .Finalize(&tensor_name_node_def));
     restore_tensor_name_node = g->AddNode(tensor_name_node_def, &s);
     TF_RETURN_IF_ERROR(s);
@@ -1351,7 +1427,8 @@ Status AddNewRestoreGraph(
         tensor_shape_proto.add_string_val(tmp_shape_and_slice);
       }
     }
-    new_tensor_shape.FromProto(tensor_shape_proto);
+    ret = new_tensor_shape.FromProto(tensor_shape_proto);
+    if (!ret) return errors::Internal("tensor_name tensor init error");
     NodeDef shape_slice_node_def;
     TF_RETURN_IF_ERROR(NodeDefBuilder(ori_restore_node->name() + "_" +
                                           std::to_string(i) +
@@ -1359,6 +1436,7 @@ Status AddNewRestoreGraph(
                                       "Const")
                            .Attr("value", new_tensor_shape)
                            .Attr("dtype", DT_STRING)
+                           .Device(assigned_device_name)
                            .Finalize(&shape_slice_node_def));
     restore_shape_slice_node = g->AddNode(shape_slice_node_def, &s);
     TF_RETURN_IF_ERROR(s);
@@ -1369,46 +1447,50 @@ Status AddNewRestoreGraph(
   if (has_ev) {
     n_dtypes.erase(n_dtypes.begin());
   }
-  TF_RETURN_IF_ERROR(
-      NodeDefBuilder(ori_restore_node->name() + "_" + std::to_string(i),
-                     kRestoreOp)
-          .Input(new_sharded_filename->name(), 0,
-                 new_sharded_filename->output_type(0))
-          .Input(restore_tensor_name_node->name(), 0,
-                 restore_tensor_name_node->output_type(0))
-          .Input(restore_shape_slice_node->name(), 0,
-                 restore_shape_slice_node->output_type(0))
-          .Attr("dtypes", n_dtypes)
-          .Finalize(&restore_node_def));
-  Node* restore_node = g->AddNode(restore_node_def, &s);
-  TF_RETURN_IF_ERROR(s);
-  restore_node->set_assigned_device_name(assigned_device_name);
+  if (n_dtypes.size() > 0) {
+    TF_RETURN_IF_ERROR(
+        NodeDefBuilder(ori_restore_node->name() + "_" + std::to_string(i),
+                       kRestoreOp)
+            .Input(new_sharded_filename->name(), 0,
+                   new_sharded_filename->output_type(0))
+            .Input(restore_tensor_name_node->name(), 0,
+                   restore_tensor_name_node->output_type(0))
+            .Input(restore_shape_slice_node->name(), 0,
+                   restore_shape_slice_node->output_type(0))
+            .Attr("dtypes", n_dtypes)
+            .Device(assigned_device_name)
+            .Finalize(&restore_node_def));
+    Node* restore_node = g->AddNode(restore_node_def, &s);
+    TF_RETURN_IF_ERROR(s);
+    restore_node->set_assigned_device_name(assigned_device_name);
+    NodeDef restore_no_op_def;
+    TF_RETURN_IF_ERROR(
+        NodeDefBuilder("save/restore_all/NoOp_" + std::to_string(i), "NoOp")
+            .Device(assigned_device_name)
+            .Finalize(&restore_no_op_def));
+    Node* restore_no_op = g->AddNode(restore_no_op_def, &s);
+    TF_RETURN_IF_ERROR(s);
+    restore_no_op->set_assigned_device_name(assigned_device_name);
 
-  NodeDef restore_no_op_def;
-  TF_RETURN_IF_ERROR(
-      NodeDefBuilder("save/restore_all/NoOp_" + std::to_string(i), "NoOp")
-          .Finalize(&restore_no_op_def));
-  Node* restore_no_op = g->AddNode(restore_no_op_def, &s);
-  TF_RETURN_IF_ERROR(s);
-  restore_no_op->set_assigned_device_name(assigned_device_name);
-
-  for (int k = 0; k < restore_tensor_vec.size(); ++k) {
-    for (auto* o_node : restore_tensor_vec[k]->out_nodes()) {
-      if (o_node->type_string() == "Assign") {
-        Node* restore_assign_node = CopyNode(g, o_node, assigned_device_name, i,
-                                             o_node->name() + "/Copy");
-        g->AddEdge(restore_tensor_vec[k], 0, restore_assign_node, 0);
-        g->AddEdge(restore_node, k, restore_assign_node, 1);
-        g->AddControlEdge(restore_assign_node, restore_no_op);
+    for (int k = 0; k < restore_tensor_vec.size(); ++k) {
+      for (auto* o_node : restore_tensor_vec[k]->out_nodes()) {
+        if (o_node->type_string() == "Assign") {
+          Node* restore_assign_node = CopyNode(g, o_node, assigned_device_name,
+                                               i, o_node->name() + "/Copy");
+          g->AddEdge(restore_tensor_vec[k], 0, restore_assign_node, 0);
+          g->AddEdge(restore_node, k, restore_assign_node, 1);
+          g->AddControlEdge(restore_assign_node, restore_no_op);
+        }
       }
     }
-  }
-  //TODO(JUNQI): Dangerous!! Unexpected behaviour would be happened when there is
-  //              multiple SaverSubGraph.
-  for (auto* n : g->nodes()) {
-    if (n->name() == "save/restore_all") {
-      g->AddControlEdge(restore_no_op, n);
-      break;
+    // TODO(JUNQI): Dangerous!! Unexpected behaviour would be happened when
+    // there is
+    //              multiple SaverSubGraph.
+    for (auto* n : g->nodes()) {
+      if (n->name() == "save/restore_all") {
+        g->AddControlEdge(restore_no_op, n);
+        break;
+      }
     }
   }
   return s;
@@ -1417,9 +1499,10 @@ Status AddNewRestoreGraph(
 Status RewritePrevSubGraph(
     Graph* g, int i, int cur_partition_nums, bool scaling_up,
     const std::vector<Node*>& save_node_vec,
-    const std::unordered_map<std::string, std::vector<Node*>>& node_to_origin_map,
-    const std::unordered_map<std::string, PartitionVarMeta>& primary_node_metas_map,
-    const std::unordered_map<string, std::vector<int64>>& variable_shape,
+    const std::unordered_map<std::string, PartitionedVariable>&
+        primary_node_metas_map,
+    const std::unordered_map<std::string, Node*>& unpartitioned_node_map,
+    std::unordered_map<string, std::vector<int64>>& variable_shape,
     const std::unordered_map<Node*, std::pair<string, string>>& nodes_to_add,
     std::unordered_set<Node*>& nodes_to_delete,
     std::unordered_set<Node*>& eval_nodes_to_add) {
@@ -1445,15 +1528,73 @@ Status RewritePrevSubGraph(
     string tensor_n = tensor_name_t.flat<tstring>()(k);
     auto s_and_s_s = shape_and_slice_t.flat<tstring>()(k);
     new_tensor_name.emplace_back(tensor_n);
+    Node* input_node = nullptr;
+    TF_RETURN_IF_ERROR(ori_save_node->input_node(5 + k, &input_node));
+    if (input_node->type_string() == "Identity") {
+      Node* identity_node;
+      TF_RETURN_IF_ERROR(input_node->input_node(0, &identity_node));
+      if (identity_node->type_string() == "Identity") {
+        const Node* read_variable_node;
+        TF_RETURN_IF_ERROR(identity_node->input_node(0, &read_variable_node));
+        Node* variable_node;
+        TF_RETURN_IF_ERROR(read_variable_node->input_node(0, &variable_node));
+        auto part_it = unpartitioned_node_map.find(variable_node->name());
+        if (part_it != unpartitioned_node_map.end()) {
+          eval_nodes_to_add.emplace(variable_node);
+        }
+      } else {  // RefVariable
+        auto part_it = unpartitioned_node_map.find(identity_node->name());
+        if (part_it != unpartitioned_node_map.end() && (identity_node->name() != "global_step")) {
+          eval_nodes_to_add.emplace(identity_node);
+        }
+      }
+    } else if (input_node->type_string() == "ReadVariableOp") {
+      Node* read_variable_node;
+      TF_RETURN_IF_ERROR(input_node->input_node(0, &read_variable_node));
+      auto part_it = unpartitioned_node_map.find(read_variable_node->name());
+      if (part_it != unpartitioned_node_map.end()) {
+        eval_nodes_to_add.emplace(read_variable_node);
+      }
+    } else {  // moving_average
+      auto part_it = unpartitioned_node_map.find(input_node->name());
+      if (part_it != unpartitioned_node_map.end()) {
+        eval_nodes_to_add.emplace(input_node);
+      }
+    }
     auto it = variable_shape.find(tensor_n);
-    if (it == variable_shape.end()) {
+    if (it ==
+        variable_shape.end()) {  // TODO (JUNQI): which variable is this case
+      LOG(INFO) << "tensor_name is: " << tensor_n
+                << " shape and slice is: " << s_and_s_s;
       new_tensor_shape.emplace_back(s_and_s_s);
-      Node* input_node = nullptr;
-      TF_RETURN_IF_ERROR(ori_save_node->input_node(5 + k, &input_node));
-      eval_nodes_to_add.emplace(input_node);
     } else {
+      auto s_and_s_s = shape_and_slice_t.flat<tstring>()(k);
+      std::vector<string> splits = str_util::Split(s_and_s_s, ' ');
+      if (splits.size() < 2) {
+        LOG(ERROR)
+            << "Need least two elements in shape_and_slice specification: ";
+      }
+      std::vector<string> items =
+          str_util::Split(splits.back(), ':', str_util::SkipEmpty());
+      std::vector<int64> shape_and_slice(items.size() * 2, 1);
+      int remainder = 0;
+      for (int j = 0; j < items.size(); ++j) {
+        int64 dim;
+        if (!strings::safe_strto64(splits[j], &dim)) {
+          LOG(ERROR) << "Non numerical dimension in shape_and_slice: ";
+        }
+        // partition_idx
+        if (j == 0) {
+          shape_and_slice[j] = dim;
+          // TODO(JUNQI) : partition_num 1 is impossible
+          shape_and_slice[j + items.size()] = dim / cur_partition_nums;
+          remainder = dim % cur_partition_nums;
+        } else {
+          shape_and_slice[j] = dim;
+          shape_and_slice[j + items.size()] = dim;
+        }
+      }
       string tmp_shape_and_slice = "";
-      auto shape_and_slice = it->second;
       for (int j = 0; j < shape_and_slice.size() / 2; ++j) {
         tmp_shape_and_slice += std::to_string(shape_and_slice[j]);
         tmp_shape_and_slice += " ";
@@ -1462,9 +1603,9 @@ Status RewritePrevSubGraph(
       for (int j = 0; j < shape_and_slice.size() / 2; ++j) {
         // partition_idx
         if (j == 0) {
-          if ((!scaling_up) && (i == cur_partition_nums - 1)) {
+          if (remainder > i) {
             int64 low = i * shape_and_slice[j + shape_and_slice.size() / 2];
-            int64 high = shape_and_slice[j] - low;
+            int64 high = shape_and_slice[j + shape_and_slice.size() / 2] + 1;
             tmp_dim.emplace_back(std::to_string(low) + "," +
                                  std::to_string(high));
           } else {
@@ -1481,9 +1622,11 @@ Status RewritePrevSubGraph(
         }
       }
       tmp_shape_and_slice += str_util::Join(tmp_dim, ":");
+      LOG(INFO) << "tensor_name is: " << tensor_n
+                << " ori shape and slice is: " << s_and_s_s
+                << " new shape and slice is: " << tmp_shape_and_slice;
       new_tensor_shape.emplace_back(tmp_shape_and_slice);
-      LOG(INFO) << "tensor_name: " << tensor_n
-                << " shape is: " << tmp_shape_and_slice;
+      variable_shape[tensor_n] = shape_and_slice;
     }
   }
   int old_tensor_size = new_tensor_shape.size();
@@ -1497,7 +1640,11 @@ Status RewritePrevSubGraph(
     for (auto& it : nodes_to_add) {
       new_tensor_name.emplace_back(it.second.first);
       new_tensor_shape.emplace_back(it.second.second);
-      n_dtypes.emplace_back(DT_FLOAT);
+      if (it.second.first == "global_step") {
+        n_dtypes.emplace_back(DT_INT64);
+      } else {
+        n_dtypes.emplace_back(DT_FLOAT);
+      }
       g->AddEdge(it.first, 0, ori_save_node, 5 + old_tensor_size + k);
       ++k;
     }
@@ -1520,6 +1667,7 @@ Status RewritePrevSubGraph(
   TF_RETURN_IF_ERROR(NodeDefBuilder(tensor_names->name() + "/Copy", "Const")
                          .Attr("value", new_tensor_name_t)
                          .Attr("dtype", DT_STRING)
+                         .Device(assigned_device_name)
                          .Finalize(&name_node_def));
   Node* name_node = g->AddNode(name_node_def, &s);
   TF_RETURN_IF_ERROR(s);
@@ -1539,6 +1687,7 @@ Status RewritePrevSubGraph(
   TF_RETURN_IF_ERROR(NodeDefBuilder(shape_and_slices->name() + "/Copy", "Const")
                          .Attr("value", new_tensor_shape_t)
                          .Attr("dtype", DT_STRING)
+                         .Device(assigned_device_name)
                          .Finalize(&shape_slice_node_def));
   Node* shape_slice_node = g->AddNode(shape_slice_node_def, &s);
   TF_RETURN_IF_ERROR(s);
@@ -1549,10 +1698,11 @@ Status RewritePrevSubGraph(
 }
 
 Status DeleteOldSaverGraph(
-    const std::vector<Node*>& save_node_vec, 
-    const std::unordered_map<string, std::vector<int64>>& variable_shape,
-    const std::unordered_map<std::string, Node*>& unpartitioned_node_map,
-    int i, int cur_partition_nums,
+    const std::vector<Node*>& save_node_vec,
+    const std::unordered_map<string, std::vector<int64>>
+        partitioned_variable_shape,
+    const std::unordered_map<std::string, Node*>& unpartitioned_node_map, int i,
+    int cur_partition_nums,
     std::unordered_map<Node*, std::pair<string, string>>& nodes_to_add,
     std::unordered_set<Node*>& nodes_to_delete) {
   Node* cur_save_node = save_node_vec[i];
@@ -1588,35 +1738,32 @@ Status DeleteOldSaverGraph(
     for (int k = 0; k < tensor_name_t.dim_size(0); ++k) {
       string tensor_n = tensor_name_t.flat<tstring>()(k);
       string s_and_s_s = shape_and_slice_t.flat<tstring>()(k);
-      if (variable_shape.find(tensor_n) == variable_shape.end()) {
-        if (tensor_n != "global_step") {  // skip global_step
-          Node* n;
-          TF_RETURN_IF_ERROR(cur_save_node->input_node(5 + k, &n));
-          if (n->name() == tensor_n) {
-            LOG(INFO) << "node_name: " << n->name()
-                      << " tensor_name: " << tensor_n;
-            nodes_to_add.emplace(
-                n, std::pair<string, string>(tensor_n, s_and_s_s));
-          } else if (n->type_string() == "Identity") {
-            Node* identity_node;
-            TF_RETURN_IF_ERROR(n->input_node(0, &identity_node));
-            if (identity_node->type_string() ==
-                "Identity") {  // ResourceVariable
-              Node* read_variable_node;
-              TF_RETURN_IF_ERROR(
-                  identity_node->input_node(0, &read_variable_node));
-              Node* resource_node;
-              TF_RETURN_IF_ERROR(
-                  read_variable_node->input_node(0, &resource_node));
-              if (unpartitioned_node_map.find(resource_node->name()) !=
-                  unpartitioned_node_map.end()) {
-                nodes_to_add.emplace(
-                    n, std::pair<string, string>(tensor_n, s_and_s_s));
-              }
-            } else {  // RefVariable
+      if (partitioned_variable_shape.find(tensor_n) ==
+          partitioned_variable_shape.end()) {
+        // LOG(INFO) << "tensor_n : " << tensor_n << " to be move";
+        Node* n;
+        TF_RETURN_IF_ERROR(cur_save_node->input_node(5 + k, &n));
+        if (n->name() == tensor_n) {
+          nodes_to_add.emplace(n,
+                               std::pair<string, string>(tensor_n, s_and_s_s));
+        } else if (n->type_string() == "Identity") {
+          Node* identity_node;
+          TF_RETURN_IF_ERROR(n->input_node(0, &identity_node));
+          if (identity_node->type_string() == "Identity") {  // ResourceVariable
+            Node* read_variable_node;
+            TF_RETURN_IF_ERROR(
+                identity_node->input_node(0, &read_variable_node));
+            Node* resource_node;
+            TF_RETURN_IF_ERROR(
+                read_variable_node->input_node(0, &resource_node));
+            if (unpartitioned_node_map.find(resource_node->name()) !=
+                unpartitioned_node_map.end()) {
               nodes_to_add.emplace(
                   n, std::pair<string, string>(tensor_n, s_and_s_s));
             }
+          } else {  // RefVariable
+            nodes_to_add.emplace(
+                n, std::pair<string, string>(tensor_n, s_and_s_s));
           }
         }
       }
@@ -1637,11 +1784,62 @@ Status DeleteOldSaverGraph(
   return Status::OK();
 }
 
+void MovePartitionedVariable(
+    Graph* g, int cur_partition_nums,
+    std::unordered_map<std::string, PartIdToNodeMap>& node_to_origin_map,
+    const std::string& primary_variable_name,
+    const std::vector<std::string>& opt_var_names,
+    const std::vector<int>& part_to_move, ElasticHookMetaNode* meta_node) {
+  int assigned_device_index = 0;
+  auto func = [&assigned_device_index, cur_partition_nums](
+                  Graph* g, Node* init_op, Node* var_node) {
+    var_node->set_assigned_device_name(init_op->assigned_device_name());
+    LOG(INFO) << "moving var_node: " << var_node->name();
+    for (auto* o_node : var_node->out_nodes()) {
+      o_node->set_assigned_device_name(var_node->assigned_device_name());
+      if (o_node->type_string() == ::des::kReAssign) {
+        o_node->ClearAttr("partition_nums");
+        o_node->AddAttr("partition_nums", cur_partition_nums + 1);
+        o_node->ClearAttr("device_id");
+        o_node->AddAttr("device_id", assigned_device_index);
+        o_node->ClearAttr("partition_id");
+        o_node->AddAttr("partition_id", cur_partition_nums);
+        o_node->set_assigned_device_name(init_op->assigned_device_name());
+        g->AddControlEdge(o_node, init_op);
+        Node* value_node = nullptr;
+        Status s =o_node->input_node(1, &value_node);
+        if (!s.ok()) LOG(ERROR) << s.error_message();
+        for (auto* i_edge : value_node->in_edges()) {
+          if (i_edge->IsControlEdge()) {
+            g->RemoveControlEdge(i_edge);
+          }
+        }
+      }
+    }
+  };
+
+  for (auto& i : part_to_move) {
+    auto* init_op =
+        meta_node->m_init_op_vec[assigned_device_index % cur_partition_nums];
+    auto* var_node = node_to_origin_map[primary_variable_name][i];
+    func(g, init_op, var_node);
+    for (auto& opt_name : opt_var_names) {
+      auto* opt_var_node = node_to_origin_map[opt_name][i];
+      func(g, init_op, opt_var_node);
+    }
+    ++assigned_device_index;
+  }
+}
+
 Status MoveUnPartitionedVariable(Graph* g, Node* search_node,
                                  ElasticHookMetaNode& meta_node) {
   Node* target_node = nullptr;
   if (search_node->type_string() == "VariableV2") {
     target_node = search_node;
+  } else if (search_node->type_string() == "VarHandleOp") {
+    target_node = search_node;
+  } else if (search_node->IsKvVarHandle()) {
+    return Status::OK();
   } else {
     Node* identity_node;
     TF_RETURN_IF_ERROR(search_node->input_node(0, &identity_node));
@@ -1706,7 +1904,7 @@ Status MoveUnPartitionedVariable(Graph* g, Node* search_node,
   return Status::OK();
 }
 
-void DeleteUnlessUnPartitionedVariable(Graph* g, Node* target_node) {
+Status DeleteUnlessUnPartitionedVariable(Graph* g, Node* target_node) {
   for (auto* o_node : target_node->out_nodes()) {
     if ((o_node->type_string() == "Identity") &&
         (o_node->name().find("elastic_import") != string::npos)) {
@@ -1715,8 +1913,41 @@ void DeleteUnlessUnPartitionedVariable(Graph* g, Node* target_node) {
           g->RemoveNode(oo_node);
         }
       }
+    } else if ((o_node->type_string() == "ReadVariableOp") &&
+               (o_node->name().find("elastic_import") != string::npos)) {
+      // ReadVariable -> Identity -> Identity
+      for (auto* oo_node : o_node->out_nodes()) {
+        if (oo_node->type_string() == "Identity") {
+          for (auto* ooo_node : oo_node->out_nodes()) {
+            if ((ooo_node->type_string() == "AssignVariableOp") &&
+                (ooo_node->name().find("elastic_import") != string::npos)) {
+              g->RemoveNode(ooo_node);
+            }
+          }
+        }
+      }
     }
   }
+  return Status::OK();
+}
+
+Status ProcessUnPartitionedVariable(
+    Graph* g, ElasticHookMetaNode& meta_node,
+    std::unordered_map<Node*, std::pair<string, string>>& nodes_to_add,
+    std::unordered_set<Node*>& eval_nodes_to_add,
+    std::unordered_map<std::string, Node*>& unpartitioned_node_map) {
+  for (auto& it : unpartitioned_node_map) {
+    if (eval_nodes_to_add.find(it.second) != eval_nodes_to_add.end()) {
+      LOG(INFO) << it.second->name() << " unpartition_node";
+      TF_RETURN_IF_ERROR(DeleteUnlessUnPartitionedVariable(g, it.second));
+    } else if (it.first == kWorkerSyncOp) {
+      continue;
+    } else {
+      LOG(INFO) << it.second->name() << " move unpartition_node";
+      TF_RETURN_IF_ERROR(MoveUnPartitionedVariable(g, it.second, meta_node));
+    }
+  }
+  return Status::OK();
 }
 
 }  // namespace tensorflow

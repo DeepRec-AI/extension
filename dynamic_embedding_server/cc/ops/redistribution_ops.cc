@@ -10,6 +10,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 =======================================================================*/
 
+#include "dynamic_embedding_server/include/utils/naming.h"
+
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op.h"
@@ -17,7 +19,7 @@ limitations under the License.
 
 namespace tensorflow {
 
-REGISTER_OP("KvResourceFilter")
+REGISTER_OP(::des::kEvExportOp)
     .Input("resource: resource")
     .Input("new_partition_nums: int32")
     .Attr("partition_id: int = 0")
@@ -32,8 +34,9 @@ Input embedding variable and current partiton_id.
 Filter out unneeded ids and values according to new partition num.
 )");
 
-REGISTER_OP("KvResourceMulImport")
+REGISTER_OP(::des::kEvImportOp)
     .Input("resource_handle: resource")
+    .Input("new_partition_nums: int32")
     .Input("keys: partition_nums * Tkeys")
     .Input("values: partition_nums * dtype")
     .Input("versions: partition_nums * int64")
@@ -47,12 +50,13 @@ Input embedding variable its parition_id, import ids and values from other parti
     embedding variables.The first part is skipped. Load them according to new partition_num.
 )");
 
-REGISTER_OP("ReAssign")
+REGISTER_OP(::des::kReAssign)
     .Input("old: Ref(T)")
     .Input("new: T")
     .Input("new_partition_nums: int32")
     .Output("output_ref: Ref(T)")
     .Attr("partition_id: int = 0")
+    .Attr("device_id: int = 0")
     .Attr("partition_nums: int")
     .Attr("T: type")
     .Attr("use_locking: bool = true")
@@ -66,12 +70,13 @@ Input old partioned RefVariable and full Variables, Assign part of value accordi
     to  new_partition_nums and its partition_id.
 )");
 
-REGISTER_OP("ReAssignResource")
+REGISTER_OP(::des::kReAssignRes)
     .Input("old_resource: resource")
     .Input("value: T")
     .Input("new_partition_nums: int32")
     .Attr("T: type")
     .Attr("partition_id: int = 0")
+    .Attr("device_id: int = 0")
     .Attr("partition_nums: int")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       return Status::OK();

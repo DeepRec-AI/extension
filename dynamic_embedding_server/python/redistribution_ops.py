@@ -15,25 +15,28 @@
 # limitations under the License.
 # =============================================================================
 
+"""redistribution ops"""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 from dynamic_embedding_server import dynamic_embedding_server_ops
 
-def re_assign_resource(variable, value, partition_num_in, partition_id, prev_part_num):
+def re_assign_resource(variable, value, partition_num_in, partition_id, device_id, prev_part_num):
   return dynamic_embedding_server_ops.re_assign_resource(variable.handle,
                                                          value,
                                                          partition_num_in,
-                                                         partition_id,
-                                                         prev_part_num)
+                                                         partition_id=partition_id,
+                                                         device_id=device_id,
+                                                         partition_nums=prev_part_num)
 
-def re_assign(variable, value, partition_num_in, partition_id, prev_part_num):
+def re_assign(variable, value, partition_num_in, partition_id, device_id, prev_part_num):
     return dynamic_embedding_server_ops.re_assign(variable,
                                                   value,
                                                   partition_num_in,
-                                                  partition_id,
-                                                  prev_part_num)
+                                                  partition_id=partition_id,
+                                                  device_id=device_id,
+                                                  partition_nums=prev_part_num)
 
 def kv_resource_filter(embedding_var, partition_num_in, key_type, dtype, partition_id):
     return dynamic_embedding_server_ops.kv_resource_filter(embedding_var.handle,
@@ -42,8 +45,9 @@ def kv_resource_filter(embedding_var, partition_num_in, key_type, dtype, partiti
                                                             dtype,
                                                             partition_id=partition_id)
 
-def kv_resource_mul_import(embedding_var, keys, values, versions, freqs, partition_id):
+def kv_resource_mul_import(embedding_var, partition_num_in, keys, values, versions, freqs, partition_id):
     return dynamic_embedding_server_ops.kv_resource_mul_import(embedding_var.handle,
+                                                               partition_num_in,
                                                                 keys,
                                                                 values,
                                                                 versions,

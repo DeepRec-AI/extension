@@ -10,7 +10,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 =======================================================================*/
 
-#if GOOGLE_CUDE || TENSORFLOW_USE_ROCM
+#if GOOGLE_CUDA
 
 #define EIGEN_USE_GPU
 
@@ -18,23 +18,26 @@ limitations under the License.
 
 #include "tensorflow/core/framework/register_types.h"
 
+#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+
 namespace tensorflow {
-typedef Eigen::GpuDevice GPUDevice;
 
 namespace des {
 
+typedef Eigen::GpuDevice GPUDevice;
+
 namespace functor {
 
-template<>
+template <typename T>
 struct CustomScale<GPUDevice, T> {
-    void operator()(const GPUDevice& d, typename TTypes<T>::Flat output,
+  void operator()(const GPUDevice& d, typename TTypes<T>::Flat output,
                   typename TTypes<T>::ConstFlat rhs, int partition_id,
                   int partition_num, int offset) {
-        for (int i = 0; i < output.dimension(0); ++i) {
-          output.data()[i] = rhs.data()[i + offset];
-        }
+    for (int i = 0; i < output.dimension(0); ++i) {
+      output.data()[i] = rhs.data()[i + offset];
     }
-}
+  }
+};
 
 template <typename T>
 struct CustomDenseUpdate<GPUDevice, T> {
@@ -44,17 +47,19 @@ struct CustomDenseUpdate<GPUDevice, T> {
   }
 };
 
-} // end namespace functor
+}  // end namespace functor
 
-#define DEFINE_GPU_KERNELS(T) \
+#define DEFINE_GPU_KERNELS(T)                               \
   template struct functor::CustomDenseUpdate<GPUDevice, T>; \
   template struct functor::CustomScale<GPUDevice, T>;
-TF_CALL_GPU_ALL_TYPES(DEFINE_GPU_KERNELS);
+TF_CALL_GPU_NUMBER_TYPES(DEFINE_GPU_KERNELS);
 TF_CALL_int32(DEFINE_GPU_KERNELS);
 TF_CALL_int64(DEFINE_GPU_KERNELS);
 TF_CALL_int8(DEFINE_GPU_KERNELS);
 #undef DEFINE_GPU_KERNELS
 
-} // end namespace des
+}  // end namespace des
 
-} // end namespace tensorflow
+}  // end namespace tensorflow
+
+#endif  // GOOGLE_CUDA

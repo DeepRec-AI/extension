@@ -104,8 +104,6 @@ struct CustomScale<CPUDevice, T> {
     } else {
       auto size = output.dimension(0);
 
-      LOG(INFO) << "size is: " << size << " offset is: " << offset;
-
       auto work = [&output, &rhs, offset](int64 start, int64 end) {
         for (int i = start; i < end; ++i) {
           output.data()[i] = rhs.data()[i + offset];
@@ -120,7 +118,22 @@ struct CustomScale<CPUDevice, T> {
   }
 };
 
+template <typename T>
+struct CustomDenseUpdate<CPUDevice, T> {
+  void operator()(const CPUDevice& d, typename TTypes<T>::Flat params,
+                  typename TTypes<T>::Flat update) {
+    LOG(INFO) << " ===== ";
+    params.device(d) = update;
+  }
+};
+
 }  // end namespace functor
+
+#define DEFINE_CPU_KERNELS(T)                         \
+  template struct functor::CustomScale<CPUDevice, T>; \
+  template struct functor::CustomDenseUpdate<CPUDevice, T>;
+TF_CALL_NUMBER_TYPES(DEFINE_CPU_KERNELS);
+#undef DEFINE_CPU_KERNELS
 
 }  // namespace des
 

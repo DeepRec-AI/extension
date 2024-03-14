@@ -22,7 +22,6 @@ limitations under the License.
 namespace tensorflow {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
-typedef Eigen::GpuDevice GPUDevice;
 
 namespace des {
 
@@ -38,14 +37,12 @@ struct CustomScale {
 template <typename Device, typename T>
 struct CustomDenseUpdate {
   void operator()(const Device& d, typename TTypes<T>::Flat params,
-                  typename TTypes<T>::Flat update) {
-    params.device(d) = update;
-  }
+                  typename TTypes<T>::Flat update) {}
 };
 
 }  // end namespace functor
 
-} // end namespace des
+}  // end namespace des
 
 }  // end namespace tensorflow
 

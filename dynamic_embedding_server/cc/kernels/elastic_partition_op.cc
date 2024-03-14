@@ -10,6 +10,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 =======================================================================*/
 
+#include "dynamic_embedding_server/include/utils/naming.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -26,6 +27,7 @@ class ElasticPartitionOp : public OpKernel {
  public:
   explicit ElasticPartitionOp(OpKernelConstruction* c) : OpKernel(c) {
     OP_REQUIRES_OK(c, c->GetAttr("num_partitions", &num_partitions_));
+    OP_REQUIRES_OK(c, c->GetAttr("partition_strategy", &partition_strategy_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -171,8 +173,14 @@ class ElasticPartitionOp : public OpKernel {
         c, c->allocate_temp(DT_INT64, TensorShape({static_cast<int64>(N)}),
                             partitions, attr));
     auto d_partitions = partitions->flat<int64>().data();
+    if (partition_strategy_ == "bucket") {
+      BucketlizedModulo((*data)->flat<TKey>().data(), N, d_partitions);
+    } else if (partition_strategy_ == "mod") {
+      ModModulo((*data)->flat<TKey>().data(), N, d_partitions);
+    } else if (partition_strategy_ == "div") {
+      DivisionModulo((*data)->flat<TKey>().data(), N, d_partitions);
+    }
 
-    CalculateModulo((*data)->flat<TKey>().data(), N, d_partitions);
     // Count how many occurrences of each partition id we have in partitions
     gtl::InlinedVector<int, 64> partition_count(num_partitions_);
     for (int64 i = 0; i < N; i++) {
@@ -199,8 +207,8 @@ class ElasticPartitionOp : public OpKernel {
     }
   }
 
-  void CalculateModulo(const int64* data, int nums, int64* partitions) {
-#if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
+  void BucketlizedModulo(const int64* data, int nums, int64* partitions) {
+#if !defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
     __m512d _b = _mm512_set1_pd(num_partitions_);
     for (int i = 0; i < nums; i += 8) {
       int index = i / 8;
@@ -218,12 +226,74 @@ class ElasticPartitionOp : public OpKernel {
     }
 #else
     for (int i = 0; i < nums; ++i) {
-      partitions[i] = data[i] % num_partitions_;
+      partitions[i] = data[i] % 1000 % num_partitions_;
     }
 #endif
   }
 
-  void CalculateModulo(const int32* data, int nums, int64* partitions) {
+  void BucketlizedModulo(const int32* data, int nums, int64* partitions) {
+    for (int i = 0; i < nums; ++i) {
+      partitions[i] = data[i] % num_partitions_;
+    }
+  }
+
+  void ModModulo(const int64* data, int nums, int64* partitions) {
+    // #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
+    //     __m512d _b = _mm512_set1_pd(num_partitions_);
+    //     for (int i = 0; i < nums; i += 8) {
+    //       int index = i / 8;
+    //       int remain = nums - i;
+    //       __mmask8 mask = (remain >= 8 ? 0xff : (1 << remain) - 1);
+    //       __m512d _a = _mm512_maskz_loadu_pd(mask, data + i);
+    //       __m512d _d = _mm512_div_round_pd(
+    //           _a, _b, (_MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC));
+    //       __m512d _m = _mm512_mul_pd(_b, _d);
+    //       //__m256i _r = _mm512_maskz_cvt_roundpd_epi32(mask,
+    //       _mm512_sub_pd(_a, _m),
+    //       //_MM_FROUND_TO_NEG_INF |_MM_FROUND_NO_EXC);
+    //       __m512i _r = _mm512_castpd_si512(_mm512_sub_pd(_a, _m));
+    //       _mm512_mask_storeu_epi64(partitions + i, mask, _r);
+    //       // _mm256_mask_store_epi32(partitions + i, mask, _r);
+    //     }
+    // #else
+    for (int i = 0; i < nums; ++i) {
+      partitions[i] = data[i] % num_partitions_;
+    }
+    // #endif
+  }
+
+  void ModModulo(const int32* data, int nums, int64* partitions) {
+    for (int i = 0; i < nums; ++i) {
+      partitions[i] = data[i] % num_partitions_;
+    }
+  }
+
+  void DivisionModulo(const int64* data, int nums, int64* partitions) {
+    // #if defined(__GNUC__) && (__GNUC__ > 6) && (__AVX512F__)
+    //     __m512d _b = _mm512_set1_pd(num_partitions_);
+    //     for (int i = 0; i < nums; i += 8) {
+    //       int index = i / 8;
+    //       int remain = nums - i;
+    //       __mmask8 mask = (remain >= 8 ? 0xff : (1 << remain) - 1);
+    //       __m512d _a = _mm512_maskz_loadu_pd(mask, data + i);
+    //       __m512d _d = _mm512_div_round_pd(
+    //           _a, _b, (_MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC));
+    //       __m512d _m = _mm512_mul_pd(_b, _d);
+    //       //__m256i _r = _mm512_maskz_cvt_roundpd_epi32(mask,
+    //       _mm512_sub_pd(_a, _m),
+    //       //_MM_FROUND_TO_NEG_INF |_MM_FROUND_NO_EXC);
+    //       __m512i _r = _mm512_castpd_si512(_mm512_sub_pd(_a, _m));
+    //       _mm512_mask_storeu_epi64(partitions + i, mask, _r);
+    //       // _mm256_mask_store_epi32(partitions + i, mask, _r);
+    //     }
+    // #else
+    for (int i = 0; i < nums; ++i) {
+      partitions[i] = data[i] / num_partitions_;
+    }
+    // #endif
+  }
+
+  void DivisionModulo(const int32* data, int nums, int64* partitions) {
     for (int i = 0; i < nums; ++i) {
       partitions[i] = data[i] % num_partitions_;
     }
@@ -231,10 +301,11 @@ class ElasticPartitionOp : public OpKernel {
 
  private:
   int num_partitions_;
+  string partition_strategy_;
 };
 
 #define REGISTER_CPU_KERNELS(key_type)                           \
-  REGISTER_KERNEL_BUILDER(Name("ElasticPartition")               \
+  REGISTER_KERNEL_BUILDER(Name(::des::kElasticPartition)         \
                               .Device(DEVICE_CPU)                \
                               .TypeConstraint<key_type>("TKey"), \
                           ElasticPartitionOp<key_type>)
