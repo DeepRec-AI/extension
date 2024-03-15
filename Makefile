@@ -104,18 +104,6 @@ rapidjson:
 	@if [ ! -d "${RAPIDJSON_DIR}/build" ]; then cd "${RAPIDJSON_DIR}"; bash ./build.sh; fi
 	@echo "rapidjson done"
 
-CFLAGS += -I$(PROTOBUF_INCLUDE)
-CFLAGS += -I$(GRPC_INCLUDE)
-CFLAGS += -I$(RAPIDJSON_INCLUDE)
-
-LDFLAGS += -L$(PROTOBUF_LIB)
-LDFLAGS += -L$(GRPC_LIB)
-LDFLAGS += -lprotobuf
-LDFLAGS += -lgrpc++
-LDFLAGS += -lgrpc
-LDFLAGS += -lssl
-LDFLAGS += -lcrypto
-
 # gazer
 GAZER := gazer
 GAZER_LIB := $(GAZER)/lib$(GAZER).so
@@ -152,7 +140,10 @@ clean:
 	@rm -fr third_party/grpc/build
 	@rm -fr third_party/protobuf/build
 	@echo "remove .o/.d/.so/.pb*"
-	@find ./ -name *.pb.* -exec rm -rf {} \;
-	@find ./ -name *_pb2* -exec rm -fr {} \;
+	@find $(GAZER) $(DES) -name *.o -exec rm -fr {} \;
+	@find $(GAZER) $(DES) -name *.d -exec rm -fr {} \;
+	@find $(GAZER) $(DES) -name *.so -exec rm -fr {} \;
+	@find $(GAZER) $(DES) -name *.pb.* -exec rm -rf {} \;
+	@find $(GAZER) $(DES) -name *_pb2* -exec rm -fr {} \;
 
 .DEFAULT_GOAL := gazer

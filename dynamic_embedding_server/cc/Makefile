@@ -1,6 +1,20 @@
 DES_SRC_DIR := $(DES)/cc/
 DES_PROTO_DIR := $(DES)/proto
-DES_PROTO_OBJ := $(DES_PROTO_DIR)/elastic_training.pb.o $(DES_PROTO_DIR)/elastic_training.grpc.pb.o 
+DES_PROTO_OBJ := $(DES_PROTO_DIR)/elastic_training.pb.o $(DES_PROTO_DIR)/elastic_training.grpc.pb.o
+
+DES_CFLAGS := $(CFLAGS)
+DES_CFLAGS += -I$(PROTOBUF_INCLUDE)
+DES_CFLAGS += -I$(GRPC_INCLUDE)
+DES_CFLAGS += -I$(RAPIDJSON_INCLUDE)
+
+DES_LDFLAGS := $(LDFLAGS)
+DES_LDFLAGS += -L$(PROTOBUF_LIB)
+DES_LDFLAGS += -L$(GRPC_LIB)
+DES_LDFLAGS += -lprotobuf
+DES_LDFLAGS += -lgrpc++
+DES_LDFLAGS += -lgrpc
+DES_LDFLAGS += -lssl
+DES_LDFLAGS += -lcrypto
 
 des_proto: grpc
 	mkdir -p $(dir $@)
@@ -29,27 +43,27 @@ CU_OBJS := $(CU_SOURCES:.cc=.o)
 
 $(DES_OBJS): %.o:%.cc protobuf grpc des_proto
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) $(TENSORFLOW_CFLAGS) $(CXX_CFLAGS) \
+	$(CXX) $(DES_CFLAGS) $(TENSORFLOW_CFLAGS) $(CXX_CFLAGS) \
         -MP -MMD -MF $<.d -o $@ -c $< -fpic
 
 $(CU_OBJS): %.o:%.cc
 	mkdir -p $(dir $@)
-	@$(NVCC) -M $< $(CFLAGS) $(TENSORFLOW_CFLAGS) -x cu \
+	@$(NVCC) -M $< $(DES_CFLAGS) $(TENSORFLOW_CFLAGS) -x cu \
 	$(NVCC) \
-		-o $@ -c $< $(CFLAGS) $(TENSORFLOW_CFLAGS) -x cu \
+		-o $@ -c $< $(DES_CFLAGS) $(TENSORFLOW_CFLAGS) -x cu \
 		--expt-relaxed-constexpr -Xcompiler -fPIC
 
 ifneq ($(CUDA_CFLAGS),)
 $(DES_LIB): $(DES_OBJS) $(CU_OBJS)
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) -std=c++11 \
+	$(CXX) $(DES_CFLAGS) -std=c++11 \
         -o $@ $(DES_PROTO_OBJ) $(DES_OBJS) $(CU_OBJS) \
-        $(TENSORFLOW_LDFLAGS) $(LDFLAGS) $(CUDA_LDFLAGS)
+        $(TENSORFLOW_LDFLAGS) $(DES_LDFLAGS) $(CUDA_LDFLAGS)
 else
 $(DES_LIB): $(DES_OBJS)
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) -std=c++11 -Wl,--version-script=$(DES)/des.script \
+	$(CXX) $(DES_CFLAGS) -std=c++11 -Wl,--version-script=$(DES)/des.script \
         -o $@ $(DES_PROTO_OBJ) $(DES_OBJS) \
-        $(TENSORFLOW_LDFLAGS) $(LDFLAGS)
+        $(TENSORFLOW_LDFLAGS) $(DES_LDFLAGS)
 endif
         

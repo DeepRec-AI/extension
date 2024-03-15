@@ -7,6 +7,20 @@ GAZER_CC_SOURCES := $(shell \
 GAZER_PROTO_DIR := $(GAZER_SRC_DIR)/proto
 GAZER_PROTO_OBJ := $(GAZER_PROTO_DIR)/scheduler.pb.o $(GAZER_PROTO_DIR)/scheduler.grpc.pb.o
 
+GAZER_CFLAGS := $(CFLAGS)
+GAZER_CFLAGS += -I$(PROTOBUF_INCLUDE)
+GAZER_CFLAGS += -I$(GRPC_INCLUDE)
+GAZER_CFLAGS += -I$(RAPIDJSON_INCLUDE)
+
+GAZER_LDFLAGS := $(LDFLAGS)
+GAZER_LDFLAGS += -L$(PROTOBUF_LIB)
+GAZER_LDFLAGS += -L$(GRPC_LIB)
+GAZER_LDFLAGS += -lprotobuf
+GAZER_LDFLAGS += -lgrpc++
+GAZER_LDFLAGS += -lgrpc
+GAZER_LDFLAGS += -lssl
+GAZER_LDFLAGS += -lcrypto
+
 gazer_proto: grpc
 	mkdir -p $(dir $@)
 	@echo "generating pb file"
@@ -21,13 +35,12 @@ GAZER_OBJS := $(GAZER_CC_SOURCES:.cc=.o)
 
 $(GAZER_OBJS): %.o:%.cc protobuf grpc gazer_proto rapidjson
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) $(CXX_CFLAGS) $(TENSORFLOW_CFLAGS)\
+	$(CXX) $(GAZER_CFLAGS) $(CXX_CFLAGS) $(TENSORFLOW_CFLAGS)\
         -MP -MMD -MF $<.d -o $@ -c $< -fpic
 
 $(GAZER_LIB): $(GAZER_OBJS)
 	mkdir -p $(dir $@)
-	$(CXX) $(CFLAGS) -std=c++11 -Wl,--version-script=$(GAZER)/gazer.script \
+	$(CXX) $(GAZER_CFLAGS) -std=c++11 -Wl,--version-script=$(GAZER)/gazer.script \
         -o $@ $(GAZER_OBJS) $(GAZER_PROTO_OBJ) \
         $(TENSORFLOW_LDFLAGS) \
-		$(LDFLAGS) -lcares
-
+	$(GAZER_LDFLAGS) -lcares
