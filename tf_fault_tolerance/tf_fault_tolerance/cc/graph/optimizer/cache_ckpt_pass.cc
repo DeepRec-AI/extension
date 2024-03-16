@@ -194,44 +194,44 @@ class AddSaveCacheCKPTSubGraphHelper {
     // Create ckpt path put node.
     std::string put_node_name = name_prefix + "/ItemBufferPut";
     TF_RETURN_IF_ERROR(NodeBuilder(put_node_name, "ItemBufferPut")
-                       .Device(device_name)
                        .Input(ckpt_path_prefix_node_, 0)
                        .Attr("shared_name", "async_cache_ckpt")
                        .Attr("is_overwritable", true)
                        .Attr("timeout_millis", timeout_millis_)
                        .Finalize(g.get(), &ckpt_path_put_node));
+    ckpt_path_put_node->set_assigned_device_name(device_name);
 
     // Create ckpt path take node.
     std::string take_node_name = name_prefix + "/ItemBufferTake";
     Node* ckpt_path_take_node = nullptr;
     TF_RETURN_IF_ERROR(NodeBuilder(take_node_name, "ItemBufferTake")
-                       .Device(device_name)
                        .Attr("dtype", ckpt_path_prefix_node_->output_type(0))
                        .Attr("shared_name", "async_cache_ckpt")
                        .Attr("is_overwritable", true)
                        .Finalize(g.get(), &ckpt_path_take_node));
+    ckpt_path_take_node->set_assigned_device_name(device_name);
     ckpt_path_prefix_node_ = ckpt_path_take_node;
 
     // Create resume node.
     std::string resume_node_name = name_prefix + "/ItemBufferResume";
     Node* ckpt_path_resume_node = nullptr;
     TF_RETURN_IF_ERROR(NodeBuilder(resume_node_name, "ItemBufferSetState")
-                       .Device(device_name)
                        .Attr("is_cancelled", false)
                        .Attr("shared_name", "async_cache_ckpt")
                        .Attr("is_overwritable", true)
                        .Finalize(g.get(), &ckpt_path_resume_node));
+    ckpt_path_resume_node->set_assigned_device_name(device_name);
     g->AddControlEdge(ckpt_path_resume_node, resume_op_target_);
 
     // Create cancel node.
     std::string cancel_node_name = name_prefix + "/ItemBufferCancel";
     Node* ckpt_path_cancel_node = nullptr;
     TF_RETURN_IF_ERROR(NodeBuilder(cancel_node_name, "ItemBufferSetState")
-                       .Device(device_name)
                        .Attr("is_cancelled", true)
                        .Attr("shared_name", "async_cache_ckpt")
                        .Attr("is_overwritable", true)
                        .Finalize(g.get(), &ckpt_path_cancel_node));
+    ckpt_path_cancel_node->set_assigned_device_name(device_name);
     g->AddControlEdge(ckpt_path_cancel_node, cancel_op_target_);
 
     return Status::OK();
@@ -280,28 +280,16 @@ class AddSaveCacheCKPTSubGraphHelper {
         cache_path_node, shard_node, num_shards_node));
 
     // Create 'GenerateCacheCKPT' node.
-    NodeDef generate_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(node_name, "GenerateCacheCKPT")
-                       .Device(device_name)
-                       .Input(ckpt_path_prefix_node_->name(), 0,
-                              ckpt_path_prefix_node_->output_type(0))
-                       .Input(cache_path_node->name(), 0,
-                              cache_path_node->output_type(0))
-                       .Input(shard_node->name(), 0, shard_node->output_type(0))
-                       .Input(num_shards_node->name(), 0,
-                              num_shards_node->output_type(0))
+    Node* generate_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(node_name, "GenerateCacheCKPT")
+                       .Input(ckpt_path_prefix_node_, 0)
+                       .Input(cache_path_node, 0)
+                       .Input(shard_node, 0)
+                       .Input(num_shards_node, 0)
                        .Attr("ckpt_storage_type", local_storage_type_)
-                       .Finalize(&generate_def));
-    Status s;
-    Node* generate_node = g->AddNode(generate_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &generate_node));
+    generate_node->set_assigned_device_name(device_name);
     shard_to_generate_node[shard] = generate_node;
-
-    // Add input edges for 'GenerateCacheCKPT' node.
-    g->AddEdge(ckpt_path_prefix_node_, 0, generate_node, 0);
-    g->AddEdge(cache_path_node, 0, generate_node, 1);
-    g->AddEdge(shard_node, 0, generate_node, 2);
-    g->AddEdge(num_shards_node, 0, generate_node, 3);
 
     return Status::OK();
   }
@@ -310,45 +298,35 @@ class AddSaveCacheCKPTSubGraphHelper {
            const std::string& name_prefix, const std::string& device_name,
            const int shard, Node*& cache_path_node, Node*& shard_node,
            Node*& num_shards_node) {
-    Status s;
-
     // cache_path node.
-    NodeDef cache_path_def;
     Tensor cache_path_val(DT_STRING, TensorShape({}));
-    cache_path_val.scalar<tstring>()() = \
+    cache_path_val.scalar<string>()() = \
       cache_path_ + "_" + std::to_string(shard);
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/cache_path", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/cache_path", "Const")
                        .Attr("dtype", DT_STRING)
                        .Attr("value", cache_path_val)
-                       .Finalize(&cache_path_def));
-    cache_path_node = g->AddNode(cache_path_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &cache_path_node));
+    cache_path_node->set_assigned_device_name(device_name);
 
     // shard node.
-    NodeDef shard_def;
     Tensor shard_val(DT_INT32, TensorShape({}));
     shard_val.scalar<int32>()() = shard;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/shard", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/shard", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", shard_val)
-                       .Finalize(&shard_def));
-    shard_node = g->AddNode(shard_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &shard_node));
+    shard_node->set_assigned_device_name(device_name);
 
     // num_shards node.
-    NodeDef num_shards_def;
     Tensor num_shards_val(DT_INT32, TensorShape({}));
     num_shards_val.scalar<int32>()() = num_shards_;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/num_shards", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/num_shards", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", num_shards_val)
-                       .Finalize(&num_shards_def));
-    num_shards_node = g->AddNode(num_shards_def, &s);
+                       .Finalize(g.get(), &num_shards_node));
+    num_shards_node->set_assigned_device_name(device_name);
 
-    return s;
+    return Status::OK();
   }
 
   Status CreateBackupRemoteCacheCKPTOp(std::unique_ptr<Graph>& g,
@@ -372,40 +350,26 @@ class AddSaveCacheCKPTSubGraphHelper {
       auto& device_name = filename_node->assigned_device_name();
 
       // cache_path node.
-      NodeDef cache_path_def;
+      Node* cache_path_node = nullptr;
       Tensor cache_path_val(DT_STRING, TensorShape({}));
-      cache_path_val.scalar<tstring>()() = \
+      cache_path_val.scalar<string>()() = \
         cache_path_ + "_" + std::to_string(id);
-      TF_RETURN_IF_ERROR(NodeDefBuilder(node_name+"/cache_path", "Const")
-                         .Device(device_name)
+      TF_RETURN_IF_ERROR(NodeBuilder(node_name+"/cache_path", "Const")
                          .Attr("dtype", DT_STRING)
                          .Attr("value", cache_path_val)
-                         .Finalize(&cache_path_def));
-      Status s;
-      Node* cache_path_node = g->AddNode(cache_path_def, &s);
-      TF_RETURN_IF_ERROR(s);
+                         .Finalize(g.get(), &cache_path_node));
+      cache_path_node->set_assigned_device_name(device_name);
 
-      NodeDef backup_node_def;
-      TF_RETURN_IF_ERROR(NodeDefBuilder(node_name, "BackupRemoteCacheCKPT")
-                         .Device(device_name)
-                         .Input(cache_path_node->name(), 0,
-                                cache_path_node->output_type(0))
-                         .Input(generate_node->name(), 1,
-                                generate_node->output_type(0))
-                         .Input(generate_node->name(), 2,
-                                generate_node->output_type(1))
-                         .Input(generate_node->name(), 3,
-                                generate_node->output_type(2))
+      Node* backup_node = nullptr;
+      TF_RETURN_IF_ERROR(NodeBuilder(node_name, "BackupRemoteCacheCKPT")
+                         .Input(cache_path_node, 0)
+                         .Input(generate_node, 0)
+                         .Input(generate_node, 1)
+                         .Input(generate_node, 2)
                          .Attr("ckpt_storage_type", remote_storage_type_)
-                         .Finalize(&backup_node_def));
-      Node* backup_node = g->AddNode(backup_node_def, &s);
-      TF_RETURN_IF_ERROR(s);
+                         .Finalize(g.get(), &backup_node));
+      backup_node->set_assigned_device_name(device_name);
       shard_to_backup_node[id].insert(backup_node);
-
-      g->AddEdge(cache_path_node, 0, backup_node, 0);
-      g->AddEdge(generate_node, 0, backup_node, 1);
-      g->AddEdge(generate_node, 1, backup_node, 2);
-      g->AddEdge(generate_node, 2, backup_node, 3);
     }
 
     return Status::OK();
@@ -565,21 +529,12 @@ class AddRestoreCacheCKPTSubGraphHelper {
                                                    shard, check_local_node));
 
     // Create 'Switch' op.
-    NodeDef switch_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(node_name + "/Swtich", "Switch")
-                       .Device(device_name)
-                       .Input(check_local_node->name(), 1,
-                              check_local_node->output_type(1))
-                       .Input(check_local_node->name(), 0,
-                              check_local_node->output_type(0))
-                       .Finalize(&switch_def));
-    Status s;
-    Node* switch_node = g->AddNode(switch_def, &s);
-    TF_RETURN_IF_ERROR(s);
-
-    // connect the edges for Switch.
-    g->AddEdge(check_local_node, 1, switch_node, 0);
-    g->AddEdge(check_local_node, 0, switch_node, 1);
+    Node* switch_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(node_name + "/Swtich", "Switch")
+                       .Input(check_local_node, 1)
+                       .Input(check_local_node, 0)
+                       .Finalize(g.get(), &switch_node));
+    switch_node->set_assigned_device_name(device_name);
 
     switch_nodes.push_back(switch_node);
 
@@ -600,24 +555,13 @@ class AddRestoreCacheCKPTSubGraphHelper {
                          device_name, shard, shard_node, num_shards_node));
 
     // Create 'CheckLocalCacheCKPT' op.
-    NodeDef check_local_cache_ckpt_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(node_name, "CheckLocalCacheCKPT")
-                       .Device(device_name)
-                       .Input(ckpt_prefix_node->name(), 0,
-                              ckpt_prefix_node->output_type(0))
-                       .Input(shard_node->name(), 0, shard_node->output_type(0))
-                       .Input(num_shards_node->name(), 0,
-                              num_shards_node->output_type(0))
+    TF_RETURN_IF_ERROR(NodeBuilder(node_name, "CheckLocalCacheCKPT")
+                       .Input(ckpt_prefix_node, 0)
+                       .Input(shard_node, 0)
+                       .Input(num_shards_node, 0)
                        .Attr("shared_name", "cache_ckpt")
-                       .Finalize(&check_local_cache_ckpt_def));
-    Status s;
-    check_local_node = g->AddNode(check_local_cache_ckpt_def, &s);
-    TF_RETURN_IF_ERROR(s);
-
-    // Connect edges for CheckLocalCacheCKPT.
-    g->AddEdge(ckpt_prefix_node, 0, check_local_node, 0);
-    g->AddEdge(shard_node, 0, check_local_node, 1);
-    g->AddEdge(num_shards_node, 0, check_local_node, 2);
+                       .Finalize(g.get(), &check_local_node));
+    check_local_node->set_assigned_device_name(device_name);
 
     return Status::OK();
   }
@@ -626,29 +570,23 @@ class AddRestoreCacheCKPTSubGraphHelper {
            std::unique_ptr<Graph>& g, const std::string& name_prefix,
            const std::string device_name, const int shard, Node*& shard_node,
            Node*& num_shards_node) {
-    NodeDef shard_def;
     Tensor shard_val(DT_INT32, TensorShape({}));
     shard_val.scalar<int32>()() = shard;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/shard", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/shard", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", shard_val)
-                       .Finalize(&shard_def));
-    Status s;
-    shard_node = g->AddNode(shard_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &shard_node));
+    shard_node->set_assigned_device_name(device_name);
 
-    NodeDef num_shards_def;
     Tensor num_shards_val(DT_INT32, TensorShape({}));
     num_shards_val.scalar<int32>()() = num_shards_;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/num_shards", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/num_shards", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", num_shards_val)
-                       .Finalize(&num_shards_def));
-    num_shards_node = g->AddNode(num_shards_def, &s);
+                       .Finalize(g.get(), &num_shards_node));
+    num_shards_node->set_assigned_device_name(device_name);
 
-    return s;
+    return Status::OK();
   }
 
   Status AddFetchRemoteCacheCKPTGraph(std::unique_ptr<Graph>& g,
@@ -695,21 +633,12 @@ class AddRestoreCacheCKPTSubGraphHelper {
 
     Node* ckpt_prefix_node = relative_nodes_.ckpt_path_prefix_node;
     // Create switch op.
-    NodeDef switch_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(repatriate_name + "/Switch", "Switch")
-                       .Device(device_name)
-                       .Input(ckpt_prefix_node->name(), 0,
-                              ckpt_prefix_node->output_type(0))
-                       .Input(in_check_node->name(), 0,
-                              in_check_node->output_type(0))
-                       .Finalize(&switch_def));
-    Status s;
-    Node* switch_node = g->AddNode(switch_def, &s);
-    TF_RETURN_IF_ERROR(s);
-
-    // Connect input edges for Switch op.
-    g->AddEdge(ckpt_prefix_node, 0, switch_node, 0);
-    g->AddEdge(in_check_node, 0, switch_node, 1);
+    Node* switch_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(repatriate_name + "/Switch", "Switch")
+                       .Input(ckpt_prefix_node, 0)
+                       .Input(in_check_node, 0)
+                       .Finalize(g.get(), &switch_node));
+    switch_node->set_assigned_device_name(device_name);
 
     // Create RepatriateRemoteCacheCKPT op.
     TF_RETURN_IF_ERROR(CreateRepatriateRemoteCacheCKPTOp(g, repatriate_name,
@@ -722,49 +651,33 @@ class AddRestoreCacheCKPTSubGraphHelper {
            const std::string& send_node_name, const std::string& device_name,
            const int shard, Node* switch_node, Node*& send_node) {
     // Create input nodes of RepatriateRemoteCacheCKPT.
-    NodeDef shard_def;
+    Node* shard_node = nullptr;
     Tensor shard_val(DT_INT32, TensorShape({}));
     shard_val.scalar<int32>()() = shard;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(send_node_name+"/shard", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(send_node_name+"/shard", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", shard_val)
-                       .Finalize(&shard_def));
-    Status s;
-    Node* shard_node = g->AddNode(shard_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &shard_node));
+    shard_node->set_assigned_device_name(device_name);
 
-    NodeDef num_shards_def;
+    Node* num_shards_node = nullptr;
     Tensor num_shards_val(DT_INT32, TensorShape({}));
     num_shards_val.scalar<int32>()() = num_shards_;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(send_node_name+"/num_shards", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(send_node_name+"/num_shards", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", num_shards_val)
-                       .Finalize(&num_shards_def));
-    Node* num_shards_node = g->AddNode(num_shards_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &num_shards_node));
+    num_shards_node->set_assigned_device_name(device_name);
 
     // Create RepatriateRemoteCacheCKPT op.
-    NodeDef send_remote_cache_ckpt_def;
     bool output_is_path = RemoteStorageIsFileSystem();
-    TF_RETURN_IF_ERROR(NodeDefBuilder(send_node_name,
-                                      "RepatriateRemoteCacheCKPT")
-                       .Device(device_name)
-                       .Input(switch_node->name(), 0,
-                              switch_node->output_type(0))
-                       .Input(shard_node->name(), 0, shard_node->output_type(0))
-                       .Input(num_shards_node->name(), 0,
-                              num_shards_node->output_type(0))
+    TF_RETURN_IF_ERROR(NodeBuilder(send_node_name, "RepatriateRemoteCacheCKPT")
+                       .Input(switch_node, 0)
+                       .Input(shard_node, 0)
+                       .Input(num_shards_node, 0)
                        .Attr("output_is_path", output_is_path)
-                       .Finalize(&send_remote_cache_ckpt_def));
-    send_node = g->AddNode(send_remote_cache_ckpt_def, &s);
-    TF_RETURN_IF_ERROR(s);
-
-    // Connect input edges for RepatriateRemoteCacheCKPT op.
-    g->AddEdge(switch_node, 0, send_node, 0);
-    g->AddEdge(shard_node, 0, send_node, 1);
-    g->AddEdge(num_shards_node, 0, send_node, 2);
+                       .Finalize(g.get(), &send_node));
+    send_node->set_assigned_device_name(device_name);
 
     return Status::OK();
   }
@@ -788,21 +701,12 @@ class AddRestoreCacheCKPTSubGraphHelper {
                          shard, repatriate_node, get_remote_node));
 
     // Create Switch node.
-    NodeDef switch_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(get_ckpt_name + "/Switch", "Switch")
-                       .Device(device_name)
-                       .Input(get_remote_node->name(), 1,
-                              get_remote_node->output_type(1))
-                       .Input(get_remote_node->name(), 0,
-                              get_remote_node->output_type(0))
-                       .Finalize(&switch_def));
-    Status s;
-    Node* switch_node = g->AddNode(switch_def, &s);
-    TF_RETURN_IF_ERROR(s);
-
-    // Connect input edges for switch.
-    g->AddEdge(get_remote_node, 1, switch_node, 0);
-    g->AddEdge(get_remote_node, 0, switch_node, 1);
+    Node* switch_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(get_ckpt_name + "/Switch", "Switch")
+                       .Input(get_remote_node, 1)
+                       .Input(get_remote_node, 0)
+                       .Finalize(g.get(), &switch_node));
+    switch_node->set_assigned_device_name(device_name);
 
     switch_nodes.push_back(switch_node);
 
@@ -812,50 +716,30 @@ class AddRestoreCacheCKPTSubGraphHelper {
   Status CreateGetRemoteCacheCKPTOp(std::unique_ptr<Graph>& g,
            const std::string& node_name, const std::string& device_name,
            const int shard, Node* repatriate_node, Node*& get_remote_node) {
-    Status s;
     // Create inputs for GetRemoteCacheCKPT op.
-    NodeDef cache_path_def;
+    Node* cache_path_node = nullptr;
     Tensor cache_path_val(DT_STRING, TensorShape({}));
-    cache_path_val.scalar<tstring>()() = \
+    cache_path_val.scalar<string>()() = \
       cache_path_ + "_" + std::to_string(shard);
-    TF_RETURN_IF_ERROR(NodeDefBuilder(node_name+"/cache_path", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(node_name+"/cache_path", "Const")
                        .Attr("dtype", DT_STRING)
                        .Attr("value", cache_path_val)
-                       .Finalize(&cache_path_def));
-    Node* cache_path_node = g->AddNode(cache_path_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &cache_path_node));
+    cache_path_node->set_assigned_device_name(device_name);
 
     // Create GetRemoteCacheCKPT op.
     Node* ckpt_prefix_node = relative_nodes_.ckpt_path_prefix_node;
-    NodeDef get_remote_cache_ckpt_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(node_name, "GetRemoteCacheCKPT")
-                       .Device(device_name)
-                       .Input(ckpt_prefix_node->name(), 0,
-                              ckpt_prefix_node->output_type(0))
-                       .Input(cache_path_node->name(), 0,
-                              cache_path_node->output_type(0))
-                       .Input(repatriate_node->name(), 0,
-                              repatriate_node->output_type(0))
-                       .Input(repatriate_node->name(), 1,
-                              repatriate_node->output_type(1))
-                       .Input(repatriate_node->name(), 2,
-                              repatriate_node->output_type(2))
-                       .Input(repatriate_node->name(), 3,
-                              repatriate_node->output_type(3))
+    TF_RETURN_IF_ERROR(NodeBuilder(node_name, "GetRemoteCacheCKPT")
+                       .Input(ckpt_prefix_node, 0)
+                       .Input(cache_path_node, 0)
+                       .Input(repatriate_node, 0)
+                       .Input(repatriate_node, 1)
+                       .Input(repatriate_node, 2)
+                       .Input(repatriate_node, 3)
                        .Attr("shared_name", "cache_ckpt")
                        .Attr("ckpt_storage_type", local_storage_type_)
-                       .Finalize(&get_remote_cache_ckpt_def));
-    get_remote_node = g->AddNode(get_remote_cache_ckpt_def, &s);
-    TF_RETURN_IF_ERROR(s);
-
-    // Connect input edges for 'CheckRemoteCacheCKPT' op.
-    g->AddEdge(ckpt_prefix_node, 0, get_remote_node, 0);
-    g->AddEdge(cache_path_node, 0, get_remote_node, 1);
-    g->AddEdge(repatriate_node, 0, get_remote_node, 2);
-    g->AddEdge(repatriate_node, 1, get_remote_node, 3);
-    g->AddEdge(repatriate_node, 2, get_remote_node, 4);
-    g->AddEdge(repatriate_node, 3, get_remote_node, 5);
+                       .Finalize(g.get(), &get_remote_node));
+    get_remote_node->set_assigned_device_name(device_name);
 
     return Status::OK();
   }
@@ -871,36 +755,20 @@ class AddRestoreCacheCKPTSubGraphHelper {
     std::string load_node_name = name_prefix+"/LoadCKPTFromFilePath";
 
     // Create Swtich Node.
-    NodeDef switch_node_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(load_node_name+"/Switch", "Switch")
-                       .Device(device_name)
-                       .Input(ckpt_path_prefix_node->name(), 0,
-                              ckpt_path_prefix_node->output_type(0))
-                       .Input(check_ckpt_node->name(), 0,
-                              check_ckpt_node->output_type(0))
-                       .Finalize(&switch_node_def));
-    Status s;
-    Node* switch_node = g->AddNode(switch_node_def, &s);
-    TF_RETURN_IF_ERROR(s);
-    g->AddEdge(ckpt_path_prefix_node, 0, switch_node, 0);
-    g->AddEdge(check_ckpt_node, 0, switch_node, 1);
+    Node* switch_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(load_node_name+"/Switch", "Switch")
+                       .Input(ckpt_path_prefix_node, 0)
+                       .Input(check_ckpt_node, 0)
+                       .Finalize(g.get(), &switch_node));
+    switch_node->set_assigned_device_name(device_name);
 
     // Create LoadCKPTFromPathFile op.
-    NodeDef load_ckpt_node_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(load_node_name, "LoadCKPTFromFilePath")
-                       .Device(device_name)
-                       .Input(switch_node->name(), 0,
-                              switch_node->output_type(0))
-                       .Input(shard_node->name(), 0, shard_node->output_type(0))
-                       .Input(num_shards_node->name(), 0,
-                              num_shards_node->output_type(0))
-                       .Finalize(&load_ckpt_node_def));
-    load_ckpt_node = g->AddNode(load_ckpt_node_def, &s);
-    TF_RETURN_IF_ERROR(s);
-    g->AddEdge(switch_node, 0, load_ckpt_node, 0);
-    g->AddEdge(shard_node, 0, load_ckpt_node, 1);
-    g->AddEdge(num_shards_node, 0, load_ckpt_node, 2);
-
+    TF_RETURN_IF_ERROR(NodeBuilder(load_node_name, "LoadCKPTFromFilePath")
+                       .Input(switch_node, 0)
+                       .Input(shard_node, 0)
+                       .Input(num_shards_node, 0)
+                       .Finalize(g.get(), &load_ckpt_node));
+    load_ckpt_node->set_assigned_device_name(device_name);
 
     return Status::OK();
   }
@@ -909,29 +777,23 @@ class AddRestoreCacheCKPTSubGraphHelper {
            std::unique_ptr<Graph>& g, const std::string& name_prefix,
            const std::string device_name, const int shard, Node*& shard_node,
            Node*& num_shards_node) {
-    NodeDef shard_def;
     Tensor shard_val(DT_INT32, TensorShape({}));
     shard_val.scalar<int32>()() = shard;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/shard", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/shard", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", shard_val)
-                       .Finalize(&shard_def));
-    Status s;
-    shard_node = g->AddNode(shard_def, &s);
-    TF_RETURN_IF_ERROR(s);
+                       .Finalize(g.get(), &shard_node));
+    shard_node->set_assigned_device_name(device_name);
 
-    NodeDef num_shards_def;
     Tensor num_shards_val(DT_INT32, TensorShape({}));
     num_shards_val.scalar<int32>()() = num_shards_;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix+"/num_shards", "Const")
-                       .Device(device_name)
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix+"/num_shards", "Const")
                        .Attr("dtype", DT_INT32)
                        .Attr("value", num_shards_val)
-                       .Finalize(&num_shards_def));
-    num_shards_node = g->AddNode(num_shards_def, &s);
+                       .Finalize(g.get(), &num_shards_node));
+    num_shards_node->set_assigned_device_name(device_name);
 
-    return s;
+    return Status::OK();
   }
 
   Status CreateMergeAndUnPackCacheCKPTResourceOp(std::unique_ptr<Graph>& g,
@@ -939,37 +801,26 @@ class AddRestoreCacheCKPTSubGraphHelper {
            const std::vector<Node*>& switch_nodes, Node* load_ckpt_node,
            Node*& unpack_node) {
     // Create merge op.
-    std::vector<NodeDefBuilder::NodeOut> src_list;
+    std::vector<NodeBuilder::NodeOut> src_list;
     for (Node* n : switch_nodes) {
-      src_list.emplace_back(n->name(), 1, n->output_type(1));
+      src_list.emplace_back(n, 1);
     }
-    src_list.emplace_back(load_ckpt_node->name(), 0,
-                          load_ckpt_node->output_type(0));
-    NodeDef merge_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix + "/Merge", "Merge")
-                       .Device(device_name)
+    src_list.emplace_back(load_ckpt_node, 0);
+
+    Node* merge_node = nullptr;
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix + "/Merge", "Merge")
                        .Input(src_list)
-                       .Finalize(&merge_def));
-    Status s;
-    Node* merge_node = g->AddNode(merge_def, &s);
-    TF_RETURN_IF_ERROR(s);
-    // Connect input edges for 'Merge' op.
-    for (size_t i = 0; i < switch_nodes.size(); i++) {
-      Node* n = switch_nodes[i];
-      g->AddEdge(n, 1, merge_node, i);
-    }
-    g->AddEdge(load_ckpt_node, 0, merge_node, switch_nodes.size());
+                       .Finalize(g.get(), &merge_node));
+     merge_node->set_assigned_device_name(device_name);
 
     // Create UnPackCacheCKPTResource node.
-    NodeDef unpack_node_def;
-    TF_RETURN_IF_ERROR(NodeDefBuilder(name_prefix + "/UnPackCacheCKPTResource",
-                                      "UnPackCacheCKPTResource")
-                       .Device(device_name)
-                       .Input(merge_node->name(), 0, merge_node->output_type(0))
-                       .Finalize(&unpack_node_def));
-    unpack_node = g->AddNode(unpack_node_def, &s);
+    TF_RETURN_IF_ERROR(NodeBuilder(name_prefix + "/UnPackCacheCKPTResource",
+                                   "UnPackCacheCKPTResource")
+                       .Input(merge_node, 0)
+                       .Finalize(g.get(), &unpack_node));
+    unpack_node->set_assigned_device_name(device_name);
 
-    return s;
+    return Status::OK();
   }
 
   // Variables.
@@ -1234,7 +1085,6 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
     auto attrs = n->attrs();
     Node* new_send_node = nullptr;
     TF_RETURN_IF_ERROR(NodeBuilder(n->name(), send_op)
-                       .Device(n->assigned_device_name())
                        .Input(src_node, out_idx)
                        .Attr("tensor_name", *(attrs.Find("tensor_name")))
                        .Attr("send_device", *(attrs.Find("send_device")))
@@ -1245,6 +1095,7 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
                              *(attrs.Find("client_terminated")))
                        .Attr("slice_size", slice_size_)
                        .Finalize(g.get(), &new_send_node));
+    new_send_node->set_assigned_device_name(n->assigned_device_name());
 
     TF_RETURN_IF_ERROR(g->UpdateEdge(src_node, out_idx, new_send_node, 0));
     g->RemoveNode(n);
@@ -1278,7 +1129,6 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
     auto attrs = n->attrs();
     Node* new_recv_node = nullptr;
     TF_RETURN_IF_ERROR(NodeBuilder(n->name(), "_FileSliceRecv")
-                       .Device(n->assigned_device_name())
                        .Attr("tensor_name", *(attrs.Find("tensor_name")))
                        .Attr("send_device", *(attrs.Find("send_device")))
                        .Attr("send_device_incarnation",
@@ -1290,6 +1140,7 @@ class ReplaceTransferOpWithSliceTransferOpPass : public GraphOptimizationPass {
                        .Attr("slice_size", slice_size_)
                        .Attr("timeout_ms", timeout_ms_)
                        .Finalize(g.get(), &new_recv_node));
+    new_recv_node->set_assigned_device_name(n->assigned_device_name());
 
     for (auto e : n->out_edges()) {
       Node* dst_node = e->dst();

@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "tensorflow/core/framework/node_def.pb.h"
+
 #include "tf_fault_tolerance/cc/kernels/item_buffer_kernels.h"
 
 namespace tensorflow {
@@ -90,9 +92,13 @@ Status ItemBuffer::SetState(bool is_cancelled) {
   return Status::OK();
 }
 
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) <= 1012L
+string ItemBuffer::DebugString() {
+#else
 string ItemBuffer::DebugString() const {
+#endif
   return strings::StrCat("ItemBuffer(has_value=", has_value_, "item=",
-                         buffer_.DeviceSafeDebugString());
+                         buffer_.DebugString());
 }
 
 void ItemBuffer::Schedule(const string& name, int64 num_threads,
@@ -116,7 +122,9 @@ void ItemBuffer::Schedule(const string& name, int64 num_threads,
 //------------------------------------------------------------------------------
 // Functions of ItemBufferOp.
 
-ItemBufferOp::ItemBufferOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+ItemBufferOp::ItemBufferOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+  OP_REQUIRES_OK(ctx, ctx->GetAttr("is_overwritable", &overwritable_));
+}
 
 void ItemBufferOp::Compute(OpKernelContext* ctx) {
   auto rm = ctx->resource_manager();
@@ -128,11 +136,8 @@ void ItemBufferOp::Compute(OpKernelContext* ctx) {
   ItemBuffer* buffer = nullptr;
   OP_REQUIRES_OK(ctx, rm->LookupOrCreate<ItemBuffer>(
                             cinfo.container(), cinfo.name(), &buffer,
-                            [&ndef](ItemBuffer** pbuf) -> Status {
-                              bool is_overwritable = false;
-                              TF_RETURN_IF_ERROR(GetNodeAttr(
-                                ndef, "is_overwritable", &is_overwritable));
-                              *pbuf = new ItemBuffer(is_overwritable);
+                            [this](ItemBuffer** pbuf) -> Status {
+                              *pbuf = new ItemBuffer(overwritable_);
                               return Status::OK();
                             }));
   core::ScopedUnref scope(buffer);
@@ -146,6 +151,7 @@ ItemBufferAsyncOp::ItemBufferAsyncOp(OpKernelConstruction* ctx)
   : AsyncOpKernel(ctx) {
   OP_REQUIRES_OK(ctx, ctx->GetAttr("shared_name", &shared_name_));
   OP_REQUIRES_OK(ctx, ctx->GetAttr("shared_threads", &shared_threads_));
+  OP_REQUIRES_OK(ctx, ctx->GetAttr("is_overwritable", &overwritable_));
 }
 
 void ItemBufferAsyncOp::ComputeAsync(OpKernelContext* ctx,
@@ -159,15 +165,12 @@ void ItemBufferAsyncOp::ComputeAsync(OpKernelContext* ctx,
   ItemBuffer* buffer = nullptr;
   OP_REQUIRES_OK_ASYNC(ctx, rm->LookupOrCreate<ItemBuffer>(
                                   cinfo.container(), cinfo.name(), &buffer,
-                                  [&ndef](ItemBuffer** pbuf) -> Status {
-                                    bool is_overwritable = false;
-                                    TF_RETURN_IF_ERROR(GetNodeAttr(ndef,
-                                      "is_overwritable", &is_overwritable));
-                                    *pbuf = new ItemBuffer(is_overwritable);
+                                  [this](ItemBuffer** pbuf) -> Status {
+                                    *pbuf = new ItemBuffer(overwritable_);
                                     return Status::OK();
                                   }), done);
-  core::ScopedUnref scope(buffer);
   Schedule(buffer, [this, ctx, done, buffer](){
+    core::ScopedUnref scope(buffer);
     ComputeAsyncWithItemBuffer(ctx, done, buffer);
   });
 }

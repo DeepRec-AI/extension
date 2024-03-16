@@ -22,6 +22,7 @@ limitations under the License.
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/mutex.h"
+#include "tensorflow/core/public/version.h"
 
 #include "tf_fault_tolerance/cc/common/cache_ckpt/cache_ckpt_manager.h"
 
@@ -37,7 +38,11 @@ class CacheCKPTVar : public ResourceBase {
   Tensor* meta_tensor();
   Tensor* data_tensor();
 
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) <= 1012L
+  std::string DebugString() override;
+#else
   std::string DebugString() const override;
+#endif
 
   TF_DISALLOW_COPY_AND_ASSIGN(CacheCKPTVar);
 
@@ -56,7 +61,7 @@ class CacheCKPTOp : public OpKernel {
   // Get CacheCKPTManager, if not exist, create a new one.
   Status GetOrCreateCacheCKPTVar(OpKernelContext* context,
                                  const ResourceHandle& handle,
-                                 core::RefCountPtr<CacheCKPTVar>& cache_ckpt);
+                                 CacheCKPTVar*& cache_ckpt);
 };
 
 } // End of namespace tensorflow.

@@ -20,6 +20,7 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/threadpool.h"
+#include "tensorflow/core/public/version.h"
 
 namespace tensorflow {
 
@@ -32,7 +33,11 @@ class ItemBuffer : public ResourceBase {
   Status Take(Tensor& record);
   Status SetState(bool is_cancelled);
 
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) <= 1012L
+  string DebugString() override;
+#else
   string DebugString() const override;
+#endif
 
   void Schedule(const string& name, int64 num_threads,
                 std::function<void()> fn);
@@ -56,6 +61,9 @@ class ItemBufferOp : public OpKernel {
  protected:
   virtual void ComputeWithItemBuffer(OpKernelContext* ctx,
                                      ItemBuffer* buf) = 0;
+
+ private:
+  bool overwritable_;
 };
 
 class ItemBufferAsyncOp : public AsyncOpKernel {
@@ -75,6 +83,7 @@ class ItemBufferAsyncOp : public AsyncOpKernel {
   // Variables.
   string shared_name_;
   int64 shared_threads_;
+  bool overwritable_;
 };
 
 class ItemBufferPutOp : public ItemBufferOp {

@@ -43,7 +43,12 @@ Tensor* CacheCKPTVar::data_tensor() {
   return &data_tensor_;
 }
 
+#if (TF_MAJOR_VERSION * 1000L + TF_MINOR_VERSION) <= 1012L
+std::string CacheCKPTVar::DebugString() {
+#else
 std::string CacheCKPTVar::DebugString() const {
+#endif
+
   std::string val = \
     strings::Printf("meta_ckpt(size: %ld bytes), data_ckpt(size: %ld bytes)",
                     meta_tensor_.TotalBytes(), data_tensor_.TotalBytes());
@@ -58,8 +63,7 @@ CacheCKPTOp::CacheCKPTOp(OpKernelConstruction* context)
 CacheCKPTOp::~CacheCKPTOp() {}
 
 Status CacheCKPTOp::GetOrCreateCacheCKPTVar(OpKernelContext* context,
-                      const ResourceHandle& handle,
-                      core::RefCountPtr<CacheCKPTVar>& cache_ckpt) {
+                      const ResourceHandle& handle, CacheCKPTVar*& cache_ckpt) {
 
   TF_RETURN_IF_ERROR(LookupOrCreateResource<CacheCKPTVar>(context, handle,
                        &cache_ckpt, [](CacheCKPTVar** p) -> Status {

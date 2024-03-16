@@ -60,11 +60,11 @@ Status MemoryCacheCKPTStorage::Write(const std::string& ckpt_meta_file_path,
                                      const std::string& ckpt_data_file_path,
                                      const bool delete_src_file) {
   Env* env = Env::Default();
-  auto ckpt_meta_buffer = cache_ckpt_meta_tensor_.scalar<tstring>().data();
+  auto ckpt_meta_buffer = cache_ckpt_meta_tensor_.scalar<string>().data();
   TF_RETURN_IF_ERROR(
     ReadFileToString(env, ckpt_meta_file_path, ckpt_meta_buffer));
 
-  auto ckpt_data_buffer = cache_ckpt_data_tensor_.scalar<tstring>().data();
+  auto ckpt_data_buffer = cache_ckpt_data_tensor_.scalar<string>().data();
   TF_RETURN_IF_ERROR(
     ReadFileToString(env, ckpt_data_file_path, ckpt_data_buffer));
 
@@ -134,10 +134,10 @@ Status POSIXFileCacheCKPTStorage::Write(const Tensor& ckpt_meta_tensor,
 
   // Write new cache ckpt to file.
   TF_RETURN_IF_ERROR(WriteStringToFile(env, cache_ckpt_meta_file_path_,
-                       ckpt_meta_tensor.scalar<tstring>()()));
+                       ckpt_meta_tensor.scalar<string>()()));
 
   TF_RETURN_IF_ERROR(WriteStringToFile(env, cache_ckpt_data_file_path_,
-                       ckpt_data_tensor.scalar<tstring>()()));
+                       ckpt_data_tensor.scalar<string>()()));
   return Status::OK();
 }
 
@@ -168,10 +168,10 @@ Status POSIXFileCacheCKPTStorage::Write(
 Status POSIXFileCacheCKPTStorage::Read(Tensor& ckpt_meta_tensor,
                                     Tensor& ckpt_data_tensor) const {
   Env* env = Env::Default();
-  auto ckpt_meta_buffer = ckpt_meta_tensor.scalar<tstring>().data();
+  auto ckpt_meta_buffer = ckpt_meta_tensor.scalar<string>().data();
   TF_RETURN_IF_ERROR(ReadFileToString(env, cache_ckpt_meta_file_path_,
                                       ckpt_meta_buffer));
-  auto ckpt_data_buffer = ckpt_data_tensor.scalar<tstring>().data();
+  auto ckpt_data_buffer = ckpt_data_tensor.scalar<string>().data();
   TF_RETURN_IF_ERROR(ReadFileToString(env, cache_ckpt_data_file_path_,
                                       ckpt_data_buffer));
 

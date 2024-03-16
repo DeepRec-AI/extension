@@ -49,7 +49,7 @@ void CheckLocalCacheCKPTOp::Compute(OpKernelContext* context) {
   }
 
   const std::string& ckpt_path_prefix = \
-    ckpt_path_prefix_tensor.scalar<tstring>()();
+    ckpt_path_prefix_tensor.scalar<string>()();
   const int shard = shard_tensor.scalar<int>()();
   const int num_shards = num_shards_tensor.scalar<int>()();
 
@@ -104,16 +104,17 @@ Status CheckLocalCacheCKPTOp::TryToGetCacheCKPT(OpKernelContext* ctx,
   TF_RETURN_IF_ERROR(ctx->allocate_temp(DT_STRING, TensorShape({}),
                                         &data_tensor));
 
-  std::string& meta_file = meta_tensor.scalar<tstring>()();
-  std::string& data_file = data_tensor.scalar<tstring>()();
+  std::string& meta_file = meta_tensor.scalar<string>()();
+  std::string& data_file = data_tensor.scalar<string>()();
 
   CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
   is_exist_cache = \
     cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key, false, meta_file, data_file);
 
   if (is_exist_cache) {
-    core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
+    CacheCKPTVar* cache_ckpt_var = nullptr;
     TF_RETURN_IF_ERROR(GetOrCreateCacheCKPTVar(ctx, handle, cache_ckpt_var));
+    core::ScopedUnref scope(cache_ckpt_var);
     mutex_lock ml(*(cache_ckpt_var->mu()));
     cache_ckpt_var->update(meta_tensor, data_tensor);
   }
@@ -153,10 +154,10 @@ void GetRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
   }
 
   const std::string& ckpt_path_prefix = \
-    ckpt_path_prefix_tensor.scalar<tstring>()();
-  const std::string& cache_path = cache_path_tensor.scalar<tstring>()();
+    ckpt_path_prefix_tensor.scalar<string>()();
+  const std::string& cache_path = cache_path_tensor.scalar<string>()();
   const bool exist_cache_ckpt = exist_cache_ckpt_tensor.scalar<bool>()();
-  const std::string& ckpt_key = ckpt_key_tensor.scalar<tstring>()();
+  const std::string& ckpt_key = ckpt_key_tensor.scalar<string>()();
   std::string ckpt_filename_prefix, unused;
   ParsePOSIXFilePath(ckpt_path_prefix, unused, ckpt_filename_prefix);
   std::string ckpt_filename_prefix_without_global_step = \
@@ -174,8 +175,8 @@ void GetRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
   ckpt_handle_tensor->scalar<ResourceHandle>()() = handle;
 
   bool exist_cache_ckpt_out = false;
-  const std::string& ckpt_meta_file = ckpt_meta_tensor.scalar<tstring>()();
-  const std::string& ckpt_data_file = ckpt_data_tensor.scalar<tstring>()();
+  const std::string& ckpt_meta_file = ckpt_meta_tensor.scalar<string>()();
+  const std::string& ckpt_data_file = ckpt_data_tensor.scalar<string>()();
   if (exist_cache_ckpt) {
     // Generate local cache ckpt.
     OP_REQUIRES_OK(context,
@@ -248,14 +249,15 @@ Status GetRemoteCacheCKPTOp::GenerateLocalCacheCKPT(
                                             &meta_out_tensor));
   TF_RETURN_IF_ERROR(context->allocate_temp(DT_STRING, TensorShape({}),
                                             &data_out_tensor));
-  std::string& meta_file_out = meta_out_tensor.scalar<tstring>()();
-  std::string& data_file_out = data_out_tensor.scalar<tstring>()();
+  std::string& meta_file_out = meta_out_tensor.scalar<string>()();
+  std::string& data_file_out = data_out_tensor.scalar<string>()();
   exist_cache_ckpt = \
     cache_ckpt_mgr->TryToGetCacheCKPT(ckpt_key, false, meta_file_out,
                                       data_file_out);
 
-  core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
+  CacheCKPTVar* cache_ckpt_var = nullptr;
   TF_RETURN_IF_ERROR(GetOrCreateCacheCKPTVar(context, handle, cache_ckpt_var));
+  core::ScopedUnref scope(cache_ckpt_var);
   mutex_lock ml(*(cache_ckpt_var->mu()));
   cache_ckpt_var->update(meta_out_tensor, data_out_tensor);
 
@@ -287,7 +289,7 @@ void RepatriateRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
   }
 
   const std::string& ckpt_path_prefix = \
-    ckpt_path_prefix_tensor.scalar<tstring>()();
+    ckpt_path_prefix_tensor.scalar<string>()();
   const int& shard = shard_tensor.scalar<int>()();
   const int& num_shards = num_shards_tensor.scalar<int>()();
   const std::string ckpt_key = \
@@ -307,7 +309,7 @@ void RepatriateRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
                                                    &ckpt_data_tensor));
 
   // File ckpt_key_tensor.
-  ckpt_key_tensor->scalar<tstring>()() = ckpt_key;
+  ckpt_key_tensor->scalar<string>()() = ckpt_key;
 
   // Fill ckpt_tensor
   bool exist_cache_ckpt = \
@@ -338,8 +340,8 @@ bool RepatriateRemoteCacheCKPTOp::FillCacheCKPTOutput(
   CacheCKPTManager* ckpt_mgr = CacheCKPTManager::GetInstance();
 
   if (output_is_path_) {
-    std::string& meta_path = ckpt_meta.scalar<tstring>()();
-    std::string& data_path = ckpt_data.scalar<tstring>()();
+    std::string& meta_path = ckpt_meta.scalar<string>()();
+    std::string& data_path = ckpt_data.scalar<string>()();
 
     return ckpt_mgr->TryToGetCacheCKPT(ckpt_key, true, meta_path, data_path);
   }
@@ -374,7 +376,7 @@ void LoadCKPTFromFilePathOp::Compute(OpKernelContext* context) {
   }
 
   const std::string& ckpt_path_prefix = \
-    ckpt_path_prefix_tensor.scalar<tstring>()();
+    ckpt_path_prefix_tensor.scalar<string>()();
   const int shard = shard_tensor.scalar<int>()();
   const int num_shards = num_shards_tensor.scalar<int>()();
 
@@ -383,10 +385,11 @@ void LoadCKPTFromFilePathOp::Compute(OpKernelContext* context) {
                                                    &ckpt_handle_tensor));
   ResourceHandle handle = \
     MakeResourceHandle<CacheCKPTVar>(context, container_, name_);
-  core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
+  ckpt_handle_tensor->scalar<ResourceHandle>()() = handle;
+  CacheCKPTVar* cache_ckpt_var = nullptr;
   OP_REQUIRES_OK(context,
                  GetOrCreateCacheCKPTVar(context, handle, cache_ckpt_var));
-  ckpt_handle_tensor->scalar<ResourceHandle>()() = handle;
+  core::ScopedUnref scope(cache_ckpt_var);
 
   Tensor ckpt_meta_tensor, ckpt_data_tensor;
   OP_REQUIRES_OK(context, context->allocate_temp(DT_STRING, TensorShape({}),
@@ -394,17 +397,17 @@ void LoadCKPTFromFilePathOp::Compute(OpKernelContext* context) {
   OP_REQUIRES_OK(context, context->allocate_temp(DT_STRING, TensorShape({}),
                                                  &ckpt_data_tensor));
   if (output_is_path_) {
-    ckpt_meta_tensor.scalar<tstring>()() = ckpt_path_prefix;
-    ckpt_data_tensor.scalar<tstring>()() = ckpt_path_prefix;
+    ckpt_meta_tensor.scalar<string>()() = ckpt_path_prefix;
+    ckpt_data_tensor.scalar<string>()() = ckpt_path_prefix;
   } else {
     const std::string ckpt_meta_file_path = CKPTMetaFilename(ckpt_path_prefix);
     const std::string ckpt_data_file_path = \
       CKPTDataFilename(ckpt_path_prefix, shard, num_shards);
     Env* env = Env::Default();
     OP_REQUIRES_OK(context, ReadFileToString(env, ckpt_meta_file_path,
-                              ckpt_meta_tensor.scalar<tstring>().data()));
+                              ckpt_meta_tensor.scalar<string>().data()));
     OP_REQUIRES_OK(context, ReadFileToString(env, ckpt_data_file_path,
-                              ckpt_data_tensor.scalar<tstring>().data()));
+                              ckpt_data_tensor.scalar<string>().data()));
   }
   mutex_lock ml(*(cache_ckpt_var->mu()));
   cache_ckpt_var->update(ckpt_meta_tensor, ckpt_data_tensor);
@@ -439,10 +442,13 @@ UnPackCacheCKPTResourceOp::UnPackCacheCKPTResourceOp(
 UnPackCacheCKPTResourceOp::~UnPackCacheCKPTResourceOp() {}
 
 void UnPackCacheCKPTResourceOp::Compute(OpKernelContext* context) {
-  core::RefCountPtr<CacheCKPTVar> cache_ckpt_var;
   const ResourceHandle& handle = HandleFromInput(context, 0);
+
+  CacheCKPTVar* cache_ckpt_var = nullptr;
   OP_REQUIRES_OK(context,
                  GetOrCreateCacheCKPTVar(context, handle, cache_ckpt_var));
+  core::ScopedUnref scope(cache_ckpt_var);
+
   Tensor* ckpt_meta_tensor;
   OP_REQUIRES_OK(context, context->allocate_output(0, TensorShape({}),
                                                    &ckpt_meta_tensor));

@@ -53,8 +53,8 @@ void GenerateCacheCKPTOp::Compute(OpKernelContext* context) {
   }
 
   const std::string& ckpt_path_prefix = \
-    ckpt_path_prefix_tensor.scalar<tstring>()();
-  const std::string& cache_path = cache_path_tensor.scalar<tstring>()();
+    ckpt_path_prefix_tensor.scalar<string>()();
+  const std::string& cache_path = cache_path_tensor.scalar<string>()();
   const int shard = shard_tensor.scalar<int>()();
   const int num_shards = num_shards_tensor.scalar<int>()();
   const std::string& ckpt_meta_path = CKPTMetaFilename(ckpt_path_prefix);
@@ -69,7 +69,7 @@ void GenerateCacheCKPTOp::Compute(OpKernelContext* context) {
                                                    &ckpt_key_tensor));
   const std::string& ckpt_key =\
     GenerateCKPTKey(ckpt_path_prefix, shard, num_shards);
-  ckpt_key_tensor->scalar<tstring>()() = ckpt_key;
+  ckpt_key_tensor->scalar<string>()() = ckpt_key;
 
   // Generate local cache ckpt.
   CacheCKPTManager* cache_ckpt_mgr = CacheCKPTManager::GetInstance();
@@ -122,11 +122,11 @@ Status GenerateCacheCKPTOp::OutputCKPT(OpKernelContext* ctx,
                                        const std::string& ckpt_key) {
   Tensor* meta_tensor;
   TF_RETURN_IF_ERROR(ctx->allocate_output(1, TensorShape({}), &meta_tensor));
-  std::string& cache_meta_file = meta_tensor->scalar<tstring>()();
+  std::string& cache_meta_file = meta_tensor->scalar<string>()();
 
   Tensor* data_tensor;
   TF_RETURN_IF_ERROR(ctx->allocate_output(2, TensorShape({}), &data_tensor));
-  std::string& cache_data_file = data_tensor->scalar<tstring>()();
+  std::string& cache_data_file = data_tensor->scalar<string>()();
 
   bool exist_cache_ckpt = \
     mgr->TryToGetCacheCKPT(ckpt_key, true, cache_meta_file, cache_data_file);
@@ -164,10 +164,10 @@ void BackupRemoteCacheCKPTOp::Compute(OpKernelContext* context) {
     return;
   }
 
-  const std::string& meta_path = ckpt_meta_tensor.scalar<tstring>()();
-  const std::string& data_path = ckpt_data_tensor.scalar<tstring>()();
-  const std::string& cache_path = cache_path_tensor.scalar<tstring>()();
-  const std::string& ckpt_key = ckpt_key_tensor.scalar<tstring>()();
+  const std::string& meta_path = ckpt_meta_tensor.scalar<string>()();
+  const std::string& data_path = ckpt_data_tensor.scalar<string>()();
+  const std::string& cache_path = cache_path_tensor.scalar<string>()();
+  const std::string& ckpt_key = ckpt_key_tensor.scalar<string>()();
 
   struct CacheCKPTManagerParams params;
   params.is_local_ckpt = false;

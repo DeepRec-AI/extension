@@ -16,6 +16,9 @@ limitations under the License.
 #include <vector>
 #include <string>
 
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
+
 #include "tensorflow/core/lib/strings/numbers.h"
 #include "tensorflow/core/lib/strings/stringprintf.h"
 #include "tensorflow/core/platform/default/logging.h"
