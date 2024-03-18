@@ -15,6 +15,9 @@ TENSORFLOW_VERSION := $(shell \
         LD_LIBRARY_PATH=/usr/local/gcc-5.3.0/lib64 $(PYTHON) -c \
         "import tensorflow as tf; print(tf.__version__)" 2>/dev/null)
 
+TENSORFLOW_PATH := $(shell \
+		$(PYTHON) -c "import tensorflow as tf; path = tf.__path__[0]; tar = 'tensorflow_core'; print(path[:path.find(tar)]+tar)" 2>/dev/null)
+
 ifeq ($(TENSORFLOW_VERSION), 1.12.2-PAI2209u1)
 TF_VERSION ?= 112
 else
@@ -37,6 +40,7 @@ TENSORFLOW_LDFLAGS := \
 $(warning "Tensorflow Version: " $(TENSORFLOW_VERSION))
 $(warning "Tensorflow CFLAGS: " $(TENSORFLOW_CFLAGS))
 $(warning "Tensorflow LDFLAGS: " $(TENSORFLOW_LDFLAGS))
+$(warning "GLIBCXX_USE_CXX11_ABI: " $(GLIBCXX_USE_CXX11_ABI))
 
 ifeq ($(GPU_MODE), true)
 $(warning dynamic_embedding_server is building with GPU enabled)
@@ -51,13 +55,14 @@ CUDA_LDFLAGS ?= -L$(CUDA_HOME)/lib64 \
 	-L/usr/lib64 \
 	-lnccl
 else
-CUDA_HOME := 
+CUDA_HOME :=
 CUDA_CFLAGS :=
 CUDA_LDFLAGS :=
 endif
 
-CFLAGS := -O3 -g \
+CFLAGS := -O3 \
 	-DNDEBUG \
+	$(GLIBCXX_USE_CXX11_ABI) \
 	$(CUDA_CFLAGS) \
 	-I.
 
@@ -80,7 +85,7 @@ PROTOBUF_LIB := $(PROTOBUF_DIR)/build/lib
 PROTOC := $(PROTOBUF_DIR)/build/bin/protoc
 protobuf:
 	@echo "prepare protobuf library ..."
-	@if [ ! -d "${PROTOBUF_DIR}/build" ]; then cd "${PROTOBUF_DIR}"; TF_VERSION=${TF_VERSION} bash ./build.sh; fi
+	@if [ ! -d "${PROTOBUF_DIR}/build" ]; then cd "${PROTOBUF_DIR}"; GLIBCXX_USE_CXX11_ABI="${GLIBCXX_USE_CXX11_ABI}" TF_VERSION=${TF_VERSION} bash ./build.sh; fi
 	@echo "protobuf done"
 
 # grpc
@@ -91,7 +96,7 @@ PROTOC_GRPC_CPP_PLUGIN := $(GRPC_DIR)/build/bin/grpc_cpp_plugin
 PROTOC_GRPC_PYTHON_PLUGIN := $(GRPC_DIR)/build/bin/grpc_python_plugin
 grpc: protobuf
 	@echo "prepare grpc library ..."
-	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; TF_VERSION=${TF_VERSION} bash ./build.sh; fi
+	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; GLIBCXX_USE_CXX11_ABI="${GLIBCXX_USE_CXX11_ABI}" TF_VERSION=${TF_VERSION} bash ./build.sh; fi
 	@echo "grpc done"
 
 # rapidjson
@@ -102,6 +107,14 @@ rapidjson:
 	@echo "prepare rapidjson library ..."
 	@if [ ! -d "${RAPIDJSON_DIR}/build" ]; then cd "${RAPIDJSON_DIR}"; bash ./build.sh; fi
 	@echo "rapidjson done"
+
+# pybind11
+PYBIND_DIR := $(THIRD_PARTY_DIR)/pybind11
+PYBIND_INCLUDE := $(PYBIND_DIR)/pybind11/include/
+pybind:
+	@echo "prepare pybind11 library ..."
+	@if [ ! -d "${PYBIND_DIR}/build" ]; then cd "${PYBIND_DIR}"; bash ./build.sh; fi
+	@echo "pybind11 done"
 
 # gazer
 GAZER := gazer
@@ -138,10 +151,29 @@ tft: $(TFT_LIB)
 	cd $(TFT); $(PYTHON) setup.py bdist_wheel
 	@ls $(TFT)/dist/*.whl
 
-.PHONY: all
-all: gazer des tft
+# deeprec_master
+MASTER := deeprec_master
+MASTER_LIB := $(MASTER)/$(MASTER)/lib$(MASTER).so
+include $(MASTER)/$(MASTER)/Makefile
 
-ALL_MOUDLES := $(GAZER) $(DES) $(TFT)
+.PHONY: master
+master: $(MASTER_LIB) pybind
+	@sh $(MASTER)/tools/prepare_des_sdk.sh \
+	$(TENSORFLOW_PATH)/core/protobuf \
+	$(MASTER)/$(MASTER)/python/scaling_controller
+	@echo -e "\033[1;33m[BUILD] $$t \033[0m" \
+	"build wheel package"
+	cd $(MASTER); $(PYTHON) setup.py bdist_wheel
+	@ls $(MASTER)/dist/*.whl
+
+.PHONY: master-build-docker
+master-build-docker:
+	@sh $(MASTER)/tools/build_docker.sh
+
+.PHONY: all
+all: gazer des tft master
+
+ALL_MOUDLES := $(GAZER) $(DES) $(TFT) $(MASTER)
 
 .PHONY: clean
 clean:
@@ -151,6 +183,7 @@ clean:
 	@rm -fr third_party/rapidjson/build
 	@rm -fr third_party/grpc/build
 	@rm -fr third_party/protobuf/build
+	@rm -fr $(addsuffix /docker_build/, $(MASTER))
 	@echo "remove .o/.d/.so/.pb*"
 	@find $(ALL_MOUDLES) -name *.o -exec rm -fr {} \;
 	@find $(ALL_MOUDLES) -name *.d -exec rm -fr {} \;
@@ -158,4 +191,4 @@ clean:
 	@find $(ALL_MOUDLES) -name *.pb.* -exec rm -rf {} \;
 	@find $(ALL_MOUDLES) -name *_pb2* -exec rm -fr {} \;
 
-.DEFAULT_GOAL := gazer
+.DEFAULT_GOAL := all
