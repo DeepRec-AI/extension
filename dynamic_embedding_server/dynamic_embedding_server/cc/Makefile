@@ -1,11 +1,12 @@
-DES_SRC_DIR := $(DES)/cc/
-DES_PROTO_DIR := $(DES)/proto
+DES_SRC_DIR := $(DES)/$(DES)/cc/
+DES_PROTO_DIR := $(DES)/$(DES)/proto
 DES_PROTO_OBJ := $(DES_PROTO_DIR)/elastic_training.pb.o $(DES_PROTO_DIR)/elastic_training.grpc.pb.o
 
 DES_CFLAGS := $(CFLAGS)
 DES_CFLAGS += -I$(PROTOBUF_INCLUDE)
 DES_CFLAGS += -I$(GRPC_INCLUDE)
 DES_CFLAGS += -I$(RAPIDJSON_INCLUDE)
+DES_CFLAGS += -I$(DES)
 
 DES_LDFLAGS := $(LDFLAGS)
 DES_LDFLAGS += -L$(PROTOBUF_LIB)
@@ -22,9 +23,9 @@ des_proto: grpc
 	$(PROTOC) --cpp_out=./ $(DES_PROTO_DIR)/elastic_training.proto
 	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PLUGIN) $(DES_PROTO_DIR)/elastic_training.proto
 	$(PROTOC) --proto_path=. --python_out=./ $(DES_PROTO_DIR)/elastic_training.proto
-	$(CXX) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
 		$(DES_PROTO_DIR)/elastic_training.pb.cc -o $(DES_PROTO_DIR)/elastic_training.pb.o
-	$(CXX) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
 		$(DES_PROTO_DIR)/elastic_training.grpc.pb.cc -o $(DES_PROTO_DIR)/elastic_training.grpc.pb.o
 
 DES_CC_SOURCES := $(shell \

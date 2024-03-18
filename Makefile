@@ -64,7 +64,6 @@ CFLAGS := -O3 -g \
 CXX_CFLAGS := -std=c++11 \
 	-fstack-protector \
 	-Wall \
-	-Werror \
 	-Wno-sign-compare \
 	-Wformat \
 	-Wformat-security
@@ -117,8 +116,8 @@ gazer: $(GAZER_LIB)
 
 # dynamic_embedding_server
 DES := dynamic_embedding_server
-DES_LIB := $(DES)/lib$(DES).so
-include $(DES)/cc/Makefile
+DES_LIB := $(DES)/$(DES)/lib$(DES).so
+include $(DES)/$(DES)/cc/Makefile
 
 .PHONY: des
 des: $(DES_LIB)
