@@ -26,7 +26,7 @@ gazer_proto: grpc
 	mkdir -p $(dir $@)
 	@echo "generating pb file"
 	$(PROTOC) --cpp_out=./ $(GAZER_PROTO_DIR)/scheduler.proto
-	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PLUGIN) $(GAZER_PROTO_DIR)/scheduler.proto
+	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(GAZER_PROTO_DIR)/scheduler.proto
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) \
 		-c $(GAZER_PROTO_DIR)/scheduler.pb.cc -o $(GAZER_PROTO_DIR)/scheduler.pb.o
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) \

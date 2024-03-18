@@ -87,7 +87,8 @@ protobuf:
 GRPC_DIR := $(THIRD_PARTY_DIR)/grpc
 GRPC_INCLUDE := $(GRPC_DIR)/build/include
 GRPC_LIB := $(GRPC_DIR)/build/lib
-PROTOC_GRPC_PLUGIN := $(GRPC_DIR)/build/bin/grpc_cpp_plugin
+PROTOC_GRPC_CPP_PLUGIN := $(GRPC_DIR)/build/bin/grpc_cpp_plugin
+PROTOC_GRPC_PYTHON_PLUGIN := $(GRPC_DIR)/build/bin/grpc_python_plugin
 grpc: protobuf
 	@echo "prepare grpc library ..."
 	@if [ ! -d "${GRPC_DIR}/build" ]; then cd "${GRPC_DIR}"; TF_VERSION=${TF_VERSION} bash ./build.sh; fi

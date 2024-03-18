@@ -21,7 +21,7 @@ des_proto: grpc
 	mkdir -p $(dir $@)
 	@echo "generating pb file"
 	$(PROTOC) --cpp_out=./ $(DES_PROTO_DIR)/elastic_training.proto
-	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PLUGIN) $(DES_PROTO_DIR)/elastic_training.proto
+	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(DES_PROTO_DIR)/elastic_training.proto
 	$(PROTOC) --proto_path=. --python_out=./ $(DES_PROTO_DIR)/elastic_training.proto
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
 		$(DES_PROTO_DIR)/elastic_training.pb.cc -o $(DES_PROTO_DIR)/elastic_training.pb.o
