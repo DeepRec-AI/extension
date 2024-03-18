@@ -59,7 +59,6 @@ endif
 CFLAGS := -O3 -g \
 	-DNDEBUG \
 	$(CUDA_CFLAGS) \
-	-Iinclude \
 	-I.
 
 CXX_CFLAGS := -std=c++11 \
@@ -106,8 +105,8 @@ rapidjson:
 
 # gazer
 GAZER := gazer
-GAZER_LIB := $(GAZER)/lib$(GAZER).so
-include $(GAZER)/cc/Makefile
+GAZER_LIB := $(GAZER)/$(GAZER)/lib$(GAZER).so
+include $(GAZER)/$(GAZER)/cc/Makefile
 
 .PHONY: gazer
 gazer: $(GAZER_LIB)

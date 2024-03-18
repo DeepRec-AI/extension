@@ -1,4 +1,4 @@
-GAZER_SRC_DIR := $(GAZER)/cc
+GAZER_SRC_DIR := $(GAZER)/$(GAZER)/cc
 GAZER_CC_SOURCES := $(shell \
         find $(GAZER_SRC_DIR)/client $(GAZER_SRC_DIR)/graph $(GAZER_SRC_DIR)/ops $(GAZER_SRC_DIR)/util -type f \
         \( -name "*.cc" ! -name "*.cu*" \) \
@@ -11,6 +11,7 @@ GAZER_CFLAGS := $(CFLAGS)
 GAZER_CFLAGS += -I$(PROTOBUF_INCLUDE)
 GAZER_CFLAGS += -I$(GRPC_INCLUDE)
 GAZER_CFLAGS += -I$(RAPIDJSON_INCLUDE)
+GAZER_CFLAGS += -I$(GAZER)
 
 GAZER_LDFLAGS := $(LDFLAGS)
 GAZER_LDFLAGS += -L$(PROTOBUF_LIB)
@@ -26,9 +27,9 @@ gazer_proto: grpc
 	@echo "generating pb file"
 	$(PROTOC) --cpp_out=./ $(GAZER_PROTO_DIR)/scheduler.proto
 	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PLUGIN) $(GAZER_PROTO_DIR)/scheduler.proto
-	$(CXX) $(GLIBCXX_USE_CXX11_ABI) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) \
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) \
 		-c $(GAZER_PROTO_DIR)/scheduler.pb.cc -o $(GAZER_PROTO_DIR)/scheduler.pb.o
-	$(CXX) $(GLIBCXX_USE_CXX11_ABI) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) \
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fpic -I. -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) \
 		-c $(GAZER_PROTO_DIR)/scheduler.grpc.pb.cc -o $(GAZER_PROTO_DIR)/scheduler.grpc.pb.o
 
 GAZER_OBJS := $(GAZER_CC_SOURCES:.cc=.o)
