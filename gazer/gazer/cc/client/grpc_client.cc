@@ -31,7 +31,7 @@ Status ReportMetricsClient::Initialize(const std::string& ai_master_addr)
    channel_args.SetInt(GRPC_ARG_ENABLE_RETRIES, 1);
    channel_ = grpc::CreateCustomChannel(
                 "dns:///" + ai_master_addr, grpc::InsecureChannelCredentials(), channel_args);
-   stub_ = ::aimaster::RpcScheduler::NewStub(channel_);
+   stub_ = ::deeprecmaster::ElasticTrainingService::NewStub(channel_);
    std::chrono::time_point<std::chrono::system_clock> deadline = 
       std::chrono::system_clock::now() + std::chrono::milliseconds(100);
    if (channel_->WaitForConnected(deadline)) {
@@ -45,35 +45,11 @@ Status ReportMetricsClient::Initialize(const std::string& ai_master_addr)
     return Status::OK();
   }
 }
-
-Status ReportMetricsClient::ConnectToAM(
-    const std::string& job, int task_id) {
-  ::aimaster::ConnectJobMonitorRequest connect_job_monitor_request;
-  connect_job_monitor_request.set_task_name(job);
-  connect_job_monitor_request.set_task_index(task_id);
-  VLOG(1) << "[DEBUG]: Request is: " << connect_job_monitor_request.DebugString();
-
-  grpc::ClientContext context;
-  //timeout 1000ms
-  std::chrono::time_point<std::chrono::system_clock> deadline =
-      std::chrono::system_clock::now() + std::chrono::milliseconds(1000);
-  context.set_deadline(deadline);
-
-  ::aimaster::JobMonitorResponse response;
-  grpc::Status status = stub_->ConnectJobMonitor(&context, connect_job_monitor_request, &response);
-  if (status.ok()) {
-     return Status::OK();
-  } else {
-     LOG(ERROR) << status.error_code() << ": " << status.error_message();
-     return Status(Code::DEADLINE_EXCEEDED, "Connect to AImaster failed");
-  }
-}
   
 void ReportMetricsClient::AsyncReport(
     const std::string& job,
     int task_id, const JsonWriter& json_writer) {
-  ::aimaster::JobMonitorAcitonRequest job_monitor_request;
-  job_monitor_request.set_action_type("ReportMetrics");
+  ::deeprecmaster::SendMetricsRequest job_monitor_request;
   double fractional_seconds_since_epoch
     = std::chrono::duration_cast<std::chrono::duration<double>>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -90,7 +66,7 @@ void ReportMetricsClient::AsyncReport(
       std::chrono::system_clock::now() + std::chrono::milliseconds(100);
   call->context.set_deadline(deadline);
   call->response_reader =
-        stub_->PrepareAsyncSendAcitonToJobMonitor(&call->context, job_monitor_request, &cq_);
+        stub_->PrepareAsyncSendMetrics(&call->context, job_monitor_request, &cq_);
   call->response_reader->StartCall();
   call->response_reader->Finish(&call->response, &call->status, (void*)call);
 }

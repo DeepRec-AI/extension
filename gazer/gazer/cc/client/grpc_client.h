@@ -18,8 +18,6 @@ class ReportMetricsClient {
     }
 
     tensorflow::Status Initialize(const std::string& ai_master_addr);
-    
-    tensorflow::Status ConnectToAM(const std::string& job, int task_id);
 
     void AsyncReport(const std::string& job,
                      int task_id,
@@ -35,7 +33,7 @@ class ReportMetricsClient {
   private:
     struct AsyncClientCall {
       // Container for the data we expect from the server.
-      ::aimaster::JobMonitorResponse response;
+      ::deeprecmaster::MasterResponse response;
 
       // Context for the client. It could be used to convey extra information to
       // the server and/or tweak certain RPC behaviors.
@@ -45,10 +43,10 @@ class ReportMetricsClient {
       grpc::Status status;
 
       std::unique_ptr<grpc::ClientAsyncResponseReader<
-          ::aimaster::JobMonitorResponse>> response_reader;
+          ::deeprecmaster::MasterResponse>> response_reader;
     };
 
-    std::unique_ptr<::aimaster::RpcScheduler::Stub> stub_;
+    std::unique_ptr<::deeprecmaster::ElasticTrainingService::Stub> stub_;
     std::shared_ptr<grpc::Channel> channel_;
     std::unique_ptr<std::thread> thread_;
     grpc::CompletionQueue cq_;
