@@ -6,7 +6,7 @@ kill $(ps aux | grep '[p]ython e2e/basic_test.py' | awk '{print $2}')
 
 TF_CONFIG="{\"cluster\": {\"worker\": [\"localhost:2222\"], \"ps\": [\"localhost:10086\", \"localhost:10087\", \"localhost:10088\",  \"localhost:10089\"], \"chief\": [\"localhost:2220\"]},\"task\": {\"type\": \"chief\", \"index\": 0}}" python e2e/aimaster_down.py > aimaster.log 2>&1 &
 
-export AIMASTER_ADDR=localhost:60001
+export DEEPRECMASTER_ADDR=localhost:60001
 export CUDA_VISIBLE_DEVICES= 
 
 TF_CONFIG="{\"cluster\": {\"worker\": [\"localhost:2222\"], \"ps\": [\"localhost:10086\", \"localhost:10087\", \"localhost:10088\", \"localhost:10089\", \"localhost:10090\", \"localhost:10091\"], \"chief\": [\"localhost:2220\"]},\"task\": {\"type\": \"ps\", \"index\": 0}}" python e2e/basic_test.py > ps_0.log 2>&1 &

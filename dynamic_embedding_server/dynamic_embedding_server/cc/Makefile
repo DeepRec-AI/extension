@@ -20,12 +20,13 @@ DES_LDFLAGS += -lcrypto
 des_proto: grpc
 	mkdir -p $(dir $@)
 	@echo "generating pb file"
-	$(PROTOC) --cpp_out=./ $(DES_PROTO_DIR)/elastic_training.proto
-	$(PROTOC) --grpc_out=./ --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(DES_PROTO_DIR)/elastic_training.proto
-	$(PROTOC) --proto_path=. --python_out=./ $(DES_PROTO_DIR)/elastic_training.proto
-	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
+	$(PROTOC) --cpp_out=./$(DES)/ -I$(DES) $(DES_PROTO_DIR)/elastic_training.proto
+	$(PROTOC) --grpc_out=./$(DES)/ -I$(DES) --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PYTHON_PLUGIN) $(DES_PROTO_DIR)/elastic_training.proto
+	$(PROTOC) --grpc_out=./$(DES)/ -I$(DES) --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(DES_PROTO_DIR)/elastic_training.proto
+	$(PROTOC) --proto_path=./$(DES) --python_out=./$(DES)/ -I$(DES) $(DES_PROTO_DIR)/elastic_training.proto
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(DES) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
 		$(DES_PROTO_DIR)/elastic_training.pb.cc -o $(DES_PROTO_DIR)/elastic_training.pb.o
-	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I./ -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(DES) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c \
 		$(DES_PROTO_DIR)/elastic_training.grpc.pb.cc -o $(DES_PROTO_DIR)/elastic_training.grpc.pb.o
 
 DES_CC_SOURCES := $(shell \

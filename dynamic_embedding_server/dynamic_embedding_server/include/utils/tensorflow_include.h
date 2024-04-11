@@ -13,17 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_NAMING_H_
-#define DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_NAMING_H_
+#ifndef DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_TENSORFLOW_INCLUDE_H_
+#define DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_TENSORFLOW_INCLUDE_H_
 
-#include "dynamic_embedding_server/include/utils/tensorflow_include.h"
+#include "tensorflow/core/public/version.h"
+#include "tensorflow/core/common_runtime/optimization_registry.h"
+#include "tensorflow/core/graph/algorithm.h"
+#include "tensorflow/core/graph/graph_constructor.h"
+#include "tensorflow/core/graph/node_builder.h"
+#include "tensorflow/core/lib/strings/str_util.h"
+#include "tensorflow/core/util/env_var.h"
 
-namespace des {
-
-constexpr char kEvImportOp[] = "KvResourceMulImport";
-constexpr char kEvExportOp[] = "KvResourceFilter";
-constexpr char kReAssign[] = "ReAssign";
-constexpr char kReAssignRes[] = "ReAssignResource";
-
-}  // namespace des
-#endif  // DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_NAMING_H_
+#endif  // DYNMAMIC_EMBEDDING_SERVER_INCLUDE_UTILS_TENSORFLOW_INCLUDE_H_

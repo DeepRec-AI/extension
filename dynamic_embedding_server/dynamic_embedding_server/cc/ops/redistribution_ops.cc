@@ -24,12 +24,23 @@ REGISTER_OP(::des::kEvExportOp)
     .Input("new_partition_nums: int32")
     .Attr("partition_id: int = 0")
     .Attr("partition_nums: int")
+    .Attr("device_id: int = 0")
     .Output("keys: partition_nums * Tkeys")
     .Output("values: partition_nums * dtype")
     .Output("versions: partition_nums * int64")
     .Output("freqs: partition_nums * int64")
     .Attr("Tkeys: {int64, int32}")
     .Attr("dtype: type")
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      int partition_nums;
+      TF_RETURN_IF_ERROR(c->GetAttr("partition_nums", &partition_nums));
+      for (int j = 0; j < 4; ++j) {
+        for (int i = 0; i < partition_nums; ++i) {
+            c->set_output(j * partition_nums + i, c->UnknownShape());
+        }
+      }
+      return Status::OK();
+    })
     .Doc(R"(
 Input embedding variable and current partiton_id.
 Filter out unneeded ids and values according to new partition num.
@@ -44,6 +55,7 @@ REGISTER_OP(::des::kEvImportOp)
     .Input("freqs: partition_nums * int64")
     .Attr("partition_id: int = 0")
     .Attr("partition_nums: int")
+    .Attr("device_id: int = 0")
     .Attr("Tkeys: {int64, int32}")
     .Attr("dtype: type")
     .Doc(R"(

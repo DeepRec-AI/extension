@@ -18,9 +18,7 @@ limitations under the License.
 
 #include <sstream>
 
-#include "tensorflow/core/common_runtime/optimization_registry.h"
-#include "tensorflow/core/graph/graph_constructor.h"
-#include "tensorflow/core/graph/node_builder.h"
+#include "dynamic_embedding_server/include/utils/tensorflow_include.h"
 
 namespace tensorflow {
 
@@ -39,13 +37,43 @@ struct ElasticHookMetaNode {
   Node* m_import_op_main;
   Node* m_init_op_main;
   Node* m_tmp_value_init_op;
+  int m_num_partition;
   std::vector<Node*> m_init_op_vec;
+  std::vector<Node*> m_no_op_vec;
 
   ElasticHookMetaNode(int num_partition)
       : m_import_op_main(nullptr),
         m_init_op_main(nullptr),
         m_tmp_value_init_op(nullptr),
-        m_init_op_vec(num_partition, nullptr){};
+        m_num_partition(num_partition),
+        m_init_op_vec(num_partition, nullptr),
+        m_no_op_vec(num_partition, nullptr){};
+  Status Init(Graph* g, int prev_partition_ratio);
+};
+
+struct DynamicPartitionSubGraph {
+  Node* dynamic_partition_node;
+  Node* dynamic_stitch_node;
+  Node* data_dp_node;
+  Node* indices_dp_node;
+  Node* new_dynamic_stitch_node;
+  std::vector<Node*> gather_node_vec;
+  std::vector<Node*> identity_node_vec;
+
+  DynamicPartitionSubGraph()
+      : dynamic_partition_node(nullptr),
+        dynamic_stitch_node(nullptr),
+        data_dp_node(nullptr),
+        indices_dp_node(nullptr),
+        new_dynamic_stitch_node(nullptr) {}
+};
+
+struct ConcatMeta {
+    Node* concat_node;
+    Node* axis_node;
+    std::vector<Node*> concat_inputs;
+    ConcatMeta() : concat_node(nullptr),
+                   axis_node(nullptr) {}
 };
 
 class PartitionedVariable {
@@ -56,7 +84,7 @@ class PartitionedVariable {
         var_type(VarType::EMBEDDING_VAR),
         part_var_full_shape(0),
         ev_partition_num(0),
-        cur_partition_nums_(0),
+        cur_partition_num(0),
         variable_prefix("") {}
 
   PartitionedVariable(Graph* graph, ElasticHookMetaNode* m_node)
@@ -68,14 +96,15 @@ class PartitionedVariable {
 
   ~PartitionedVariable() {}
 
-  void Prepare(int prev_partition_ratio);
+  void Prepare(int cur_partition_nums, int prev_partition_num,
+               int delta_partition_num);
 
-  Status Scaling(int cur_partition_nums, int prev_partition_ratio);
+  Status Scaling(int prev_partition_ratio);
 
-  Status ScalingUp(std::unordered_set<Node*>& nodes_to_delete,
+  Status ScalingUp(std::unordered_set<Node*>* nodes_to_delete,
                    int prev_partition_ratio);
 
-  Status ScalingDown(std::unordered_set<Node*>& nodes_to_delete);
+  Status ScalingDown(std::unordered_set<Node*>* nodes_to_delete);
 
   Graph* g;
   ElasticHookMetaNode* meta_node;
@@ -83,7 +112,7 @@ class PartitionedVariable {
   VarType var_type;
   int part_var_full_shape;
   int ev_partition_num;
-  int cur_partition_nums_;
+  int cur_partition_num;
   std::string variable_prefix;
   std::unordered_set<std::string> opt_ev_names;
   std::vector<std::string> sorted_opt_ev_names;
@@ -101,92 +130,95 @@ class PartitionedVariable {
     }
     return debug_string.str();
   }
+  
+  void InitPartToDevice(const PartIdToNodeMap& partition_node_map,
+        int& original_indices, std::vector<int>& part_to_device);
 
+  Status ScalingUpEmbeddingVar(int original_indices,
+                               std::vector<int>& part_to_device,
+                               std::unordered_set<Node*>* nodes_to_delete,
+                               int prev_partition_num);
+
+  Status ScalingUpResVar(int original_indices, std::vector<int>& part_to_device,
+                         std::unordered_set<Node*>* nodes_to_delete,
+                         int prev_partition_num);
+
+  Status ScalingUpVar(int original_indices, std::vector<int>& part_to_device,
+                      std::unordered_set<Node*>* nodes_to_delete,
+                      int prev_partition_num);
+
+  Status ScalingDownEV(std::vector<bool>& part_to_scale_down,
+                       std::unordered_set<Node*>* nodes_to_delete);
+
+  Status ScalingDownVar(std::vector<bool>& part_to_scale_down,
+                        std::unordered_set<Node*>* nodes_to_delete);
+
+  Status ScalingDownResVar(std::vector<bool>& part_to_scale_down,
+                           std::unordered_set<Node*>* nodes_to_delete);
+
+  /********    BackwardGraph    **********/
   Status ScalingDownSparseVariableBackWardGraph(
-      std::unordered_set<Node*>& nodes_to_delete, Node* data_dp_node,
-      Node* indices_dp_node, Node* p_dynamic_stitch_node,
+      std::unordered_set<Node*>* nodes_to_delete,
+      std::unordered_map<std::string, DynamicPartitionSubGraph>&
+          prefix_name_map,
       std::vector<bool>& part_to_scale_down);
 
   Status ScalingDownDenseBackWardGraph(
-      std::unordered_set<Node*>& nodes_to_delete,
+      std::unordered_set<Node*>* nodes_to_delete,
       std::vector<bool>& part_to_scale_down);
 
-  Status ScalingUpSparseVariableBackWardGraph(int original_indices,
-                                              Node* data_dp_node,
-                                              Node* indices_dp_node,
-                                              Node* p_dynamic_stitch_node,
-                                              std::vector<Node*>& no_op_vec,
-                                              std::vector<int>& part_to_device);
+  Status ScalingUpSparseVariableBackWardGraph(
+      int original_indices,
+      std::unordered_map<std::string, DynamicPartitionSubGraph>&
+          prefix_name_map,
+      std::vector<int>& part_to_device);
 
-  Status ScalingUpDenseBackWardGraph(int original_indices, Node* data_dp_node,
-                                     Node* indices_dp_node,
-                                     std::vector<Node*>& no_op_vec,
-                                     std::vector<int>& part_to_device);
+  Status ScalingUpDenseBackWardGraph(
+      int original_indices,
+      std::unordered_map<std::string, DynamicPartitionSubGraph>&
+          prefix_name_map,
+      std::vector<int>& part_to_device);
 
-  Status ScalingDownBackWardGraph(std::unordered_set<Node*>& nodes_to_delete,
-                                  Node* data_dp_node, Node* indices_dp_node,
-                                  Node* p_dynamic_stitch_node,
-                                  std::vector<bool>& part_to_scale_down);
+  /********    DynamicPartitionGraph    **********/
+  Status RewriteDynamicPartitionGraph(
+      PartIdToNodeMap& ev_node_vec,
+      std::unordered_map<std::string, DynamicPartitionSubGraph>&
+          prefix_name_map,
+      std::unordered_set<Node*>* nodes_to_delete,
+      const std::vector<bool>* part_to_scale_down = nullptr);
 
-  Status ScalingUpBackWardGraph(int original_indices, Node* data_dp_node,
-                                Node* indices_dp_node,
-                                Node* p_dynamic_stitch_node,
-                                std::vector<Node*>& no_op_vec,
-                                std::vector<int>& part_to_device);
-
-  Status RewriteElasticPartitionGraph(
-      PartIdToNodeMap& ev_node_vec, Node** data_dp_node, Node** indices_dp_node,
-      Node** p_dynamic_stitch_node, std::unordered_set<Node*>& nodes_to_delete);
-
-  Status ScalingUpRedistributionGraph(int original_indices,
-                                      PartIdToNodeMap& new_ev_node_vec,
-                                      Node* import_op_main,
-                                      std::vector<int>& part_to_device,
-                                      std::vector<Node*>& primary_ev_filters);
-
-  Status ScalingDownRedistributionGraph(
-      VarType& var_type, PartIdToNodeMap& new_ev_node_vec,
-      std::unordered_set<Node*>& nodes_to_delete,
-      std::vector<bool>& part_to_scale_down);
-
-  Status ScalingUpEVRedistributionGraph(int original_indices,
-                                        PartIdToNodeMap& new_ev_node_vec,
-                                        Node* import_op_main,
-                                        std::vector<int>& part_to_device,
-                                        std::vector<Node*>& primary_ev_filters);
-
-  Status ScalingUpResVarRedistributionGraph(
+  /********    RedistributionGraph    **********/
+  Status ScalingUpEVRedistributionGraph(
       int original_indices, PartIdToNodeMap& new_ev_node_vec,
-      Node* import_op_main, std::vector<int>& part_to_device,
-      std::vector<Node*>& primary_ev_filters);
+      std::unordered_set<Node*>* nodes_to_delete,
+      std::vector<int>& part_to_device,
+      std::vector<std::pair<Node*, Node*>>& primary_ev_filters);
 
-  Status ScalingUpVarRedistributionGraph(
-      int original_indices, PartIdToNodeMap& new_ev_node_vec,
-      Node* import_op_main, std::vector<int>& part_to_device,
-      std::vector<Node*>& primary_ev_filters);
+  Status ScalingUpResVarRedistributionGraph(int original_indices,
+                                            PartIdToNodeMap& new_ev_node_vec,
+                                            std::vector<int>& part_to_device);
+
+  Status ScalingUpVarRedistributionGraph(int original_indices,
+                                         PartIdToNodeMap& new_ev_node_vec,
+                                         std::vector<int>& part_to_device);
 
   Status ScalingDownEVRedistributionGraph(
       PartIdToNodeMap& new_ev_node_vec,
-      std::unordered_set<Node*>& nodes_to_delete,
+      std::vector<std::pair<Node*, Node*>>& primary_ev_filters,
+      std::unordered_set<Node*>* nodes_to_delete,
       std::vector<bool>& part_to_scale_down);
 
   Status ScalingDownResVarRedistributionGraph(
       PartIdToNodeMap& new_ev_node_vec,
-      std::unordered_set<Node*>& nodes_to_delete,
+      std::unordered_set<Node*>* nodes_to_delete,
       std::vector<bool>& part_to_scale_down);
 
   Status ScalingDownVarRedistributionGraph(
       PartIdToNodeMap& new_ev_node_vec,
-      std::unordered_set<Node*>& nodes_to_delete,
+      std::unordered_set<Node*>* nodes_to_delete,
       std::vector<bool>& part_to_scale_down);
 
-  Status ScalingUpForWardGraph(int original_indices,
-                               std::vector<int>& part_to_device,
-                               std::unordered_set<Node*>& nodes_to_delete,
-                               int prev_partition_ratio);
-
-  Status ScalingDownForWardGraph(std::vector<bool>& part_to_scale_down,
-                                 std::unordered_set<Node*>& nodes_to_delete);
+  /********    ForwardGraph    **********/
 
   Status ScalingUpVarForWardGraph(int original_indices,
                                   const std::string& var_name,
@@ -194,32 +226,34 @@ class PartitionedVariable {
                                   int prev_partition_ratio);
 
   Status ScalingUpEVForWardGraph(int original_indices,
-                                 std::vector<int>& part_to_device,
-                                 std::unordered_set<Node*>& nodes_to_delete);
+                                 std::vector<int>& part_to_device);
 
   Status ScalingUpResVarForWardGraph(
       int original_indices, std::vector<int>& part_to_device,
-      std::unordered_set<Node*>& nodes_to_delete);
+      std::unordered_set<Node*>* nodes_to_delete);
 
   Status ScalingDownEVForWardGraph(std::vector<bool>& part_to_scale_down,
-                                   std::unordered_set<Node*>& nodes_to_delete);
+                                   std::unordered_set<Node*>* nodes_to_delete);
 
   Status ScalingDownResVarForWardGraph(
       PartIdToNodeMap& node_vec, std::vector<bool>& part_to_scale_down,
-      std::unordered_set<Node*>& nodes_to_delete);
+      std::unordered_set<Node*>* nodes_to_delete);
 
   Status ScalingDownVarForWardGraph(PartIdToNodeMap& node_vec,
                                     std::vector<bool>& part_to_scale_down,
-                                    std::unordered_set<Node*>& nodes_to_delete);
+                                    std::unordered_set<Node*>* nodes_to_delete);
 };
 
 class ElasticTrainingPass : public GraphOptimizationPass {
  public:
+  ElasticTrainingPass()
+      : prev_partition_num_(0),
+        delta_partition_num_(0),
+        scaling_up_(false),
+        initialized_(false) {}
   Status Run(const GraphOptimizationPassOptions& options) override;
 
   Status RewriteSubGraph(Graph* g);
-
-  Status InitHookMetaNode(Graph* g, ElasticHookMetaNode& meta_node);
 
   Status InitVarMeta(
       Graph* g, ElasticHookMetaNode* meta_node,
@@ -227,11 +261,12 @@ class ElasticTrainingPass : public GraphOptimizationPass {
           primary_ev_metas_map,
       std::unordered_map<std::string, Node*>& unpartitioned_node_map);
 
+  // Main driver of ElasticTraining optimizations.
   Status RewriteTrainingSubGraph(
       Graph* g,
       std::unordered_map<std::string, PartitionedVariable>&
           primary_ev_metas_map,
-      ElasticHookMetaNode& meta_node);
+      ElasticHookMetaNode* meta_node);
 
   Status RewriteSavingSubGraph(
       Graph* g,
@@ -241,10 +276,11 @@ class ElasticTrainingPass : public GraphOptimizationPass {
       ElasticHookMetaNode& meta_node);
 
  private:
-  static int cur_partition_nums_;
-  int prev_partition_ratio_;
-  bool scaling_up_{false};
-  bool initialized_{false};
+  static int cur_partition_num_;
+  int prev_partition_num_;
+  int delta_partition_num_;
+  bool scaling_up_;
+  bool initialized_;
 };
 
 }  // namespace tensorflow

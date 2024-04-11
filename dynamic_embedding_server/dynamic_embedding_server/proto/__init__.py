@@ -1,2 +1,2 @@
-from . import elastic_training_pb2
-from . import elastic_training_pb2_grpc
+from dynamic_embedding_server.proto import elastic_training_pb2
+from dynamic_embedding_server.proto import elastic_training_pb2_grpc

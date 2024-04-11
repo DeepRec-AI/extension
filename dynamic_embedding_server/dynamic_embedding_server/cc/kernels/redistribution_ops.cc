@@ -43,6 +43,7 @@ class KvResourceFilterOp : public OpKernel {
   explicit KvResourceFilterOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("partition_id", &partition_id_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("partition_nums", &partition_nums_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("device_id", &device_id_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -58,6 +59,9 @@ class KvResourceFilterOp : public OpKernel {
     filtered_keys.resize(partition_nums_);
     value_ptr_list.resize(partition_nums_);
     int64 before_size = embedding_var->Size();
+    if (device_id_ >= partition_num) {
+      partition_id_ = device_id_;
+    }
     OP_REQUIRES_OK(
         ctx, embedding_var->GetShardedSnapshot(filtered_keys, value_ptr_list,
                                                partition_id_, partition_num));
@@ -96,6 +100,7 @@ class KvResourceFilterOp : public OpKernel {
  private:
   int partition_id_;
   int partition_nums_;
+  int device_id_;
 };
 
 #define REGISTER_CPU_KERNELS(key_type, value_type)                  \
@@ -115,6 +120,7 @@ class KvResourceMulImportOp : public OpKernel {
   explicit KvResourceMulImportOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("partition_id", &partition_id_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("partition_nums", &partition_nums_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("device_id", &device_id_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -125,22 +131,27 @@ class KvResourceMulImportOp : public OpKernel {
     const Tensor& partition_num_tensor = ctx->input(1);
     int partition_num = partition_num_tensor.flat<int>()(0);
     int64 before_size = embedding_var->Size();
+    if ((device_id_ < partition_id_) && (partition_id_ >= partition_num)) {
+      partition_id_ = partition_id_ % partition_num;
+    } else if (device_id_ >= partition_num) {
+      partition_id_ = device_id_;
+    }
     if (partition_id_ < partition_num) {
       // part 0 is itself, skipped.
-      for (int i = 1; i < partition_nums_; ++i) {
+      for (int i = 1; i < partition_num; ++i) {
         const Tensor& import_ids_tensor = ctx->input(2 + i);
         auto* import_ids = import_ids_tensor.flat<TKey>().data();
         int64 N = import_ids_tensor.NumElements();
         if (N == 0) continue;
         const Tensor& import_values_tensor =
-            ctx->input(2 + partition_nums_ + i);
+            ctx->input(2 + partition_num + i);
         auto* import_values = import_values_tensor.flat<float>().data();
 
         const Tensor& import_versions_tensor =
-            ctx->input(2 + partition_nums_ * 2 + i);
+            ctx->input(2 + partition_num * 2 + i);
         auto* import_versions = import_versions_tensor.flat<int64>().data();
         const Tensor& import_freqs_tensor =
-            ctx->input(2 + partition_nums_ * 3 + i);
+            ctx->input(2 + partition_num * 3 + i);
         auto* import_freqs = import_freqs_tensor.flat<int64>().data();
         OP_REQUIRES_OK(ctx, embedding_var->RestoreFromKeysAndValues(
                                 N, partition_id_, partition_num, import_ids,
@@ -164,6 +175,7 @@ class KvResourceMulImportOp : public OpKernel {
  private:
   int partition_id_;
   int partition_nums_;
+  int device_id_;
 };
 
 #define REGISTER_CPU_KERNELS(key_type, value_type)                  \
@@ -209,29 +221,30 @@ class ReAssignOp : public OpKernel {
       int total_shard_unit = 0;
 
       if (num_partitions_ == 1) {
-        VLOG(1) << "partition num is 1. Early return.";
+        VLOG(1)<< "partition num is 1. Early return.";
         return;
       }
       if (device_id_ >= new_num_part) {
-        VLOG(1) << "No need to reassign. Early return.";
+        VLOG(1)<< "No need to reassign. Early return.";
         return;
       }
-
+      
       if (new_num_part > num_partitions_) {
         calulate_part_num_and_offset(rhs, remainder, partition_id_, shard_unit,
                                      total_shard_unit);
-        VLOG(1) << "SCALING UP: " << new_shape.dim_size(0) << " origin shape "
+        VLOG(1)<< "SCALING UP: " << new_shape.dim_size(0) << " origin shape "
                 << rhs.shape().dim_size(0) << " offset " << total_shard_unit;
       } else {
-        if (partition_id_ > device_id_) {
-          calulate_part_num_and_offset(rhs, remainder, device_id_, shard_unit,
-                                       total_shard_unit);
-        } else {
-          calulate_part_num_and_offset(rhs, remainder, partition_id_,
-                                       shard_unit, total_shard_unit);
+        int offset = num_partitions_ - new_num_part;
+        int part_id = partition_id_;
+        if (partition_id_ >= new_num_part) {
+          part_id = partition_id_ - offset;
         }
-        VLOG(1) << "SCALING DOWN: " << new_shape.dim_size(0) << " origin shape "
-                << rhs.shape().dim_size(0) << " offset " << total_shard_unit;
+        calulate_part_num_and_offset(rhs, remainder, part_id, shard_unit,
+                                       total_shard_unit);
+        VLOG(1)<< "SCALING DOWN: " << new_shape.dim_size(0) << " origin shape "
+                << rhs.shape().dim_size(0) << " offset " << total_shard_unit
+                << " part_id: " << part_id;
       }
       new_shape.set_dim(0, shard_unit);
       // Otherwise, create a new persistent tensor whose shape matches the
@@ -356,16 +369,16 @@ class ReAssignResourceOp : public OpKernel {
     int total_shard_unit = 0;
 
     if (num_partitions_ == 1) {
-      VLOG(1) << "partition num is 1. Early return.";
+      VLOG(1)<< "partition num is 1. Early return.";
       return;
     }
     if (device_id_ >= new_num_part) {
-      VLOG(1) << "No need to reassign. Early return.";
+      VLOG(1)<< "No need to reassign. Early return.";
       return;
     }
 
     if (new_num_part == num_partitions_) {
-      VLOG(1) << "partition num has not changed. Early return.";
+      VLOG(1)<< "partition num has not changed. Early return.";
       return;
     }
     OP_REQUIRES_OK(context,

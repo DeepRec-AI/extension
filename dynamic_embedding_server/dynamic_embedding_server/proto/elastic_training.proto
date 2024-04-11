@@ -68,7 +68,33 @@ message FetchParamsResponse {
   map<string, int32> param_partition_map = 3; // per partition num of variable
 }
 
+message MasterRequest {
+  Code code = 1;
+  string msg = 2;
+}
+
+message MasterResponse {
+  Code code = 1;
+  string msg = 2;
+}
+
+message  PsResourceRequest {
+  int32 ps_num = 1;
+  int64 ps_memory = 2;
+  bool has_ev = 3;
+}
+
+message IpPortRequest {
+  int32 task_index = 1;
+  string job_name = 2;
+  string ip_port = 3;
+}
+
 service ElasticTrainingService {
+  rpc SendIpPort(IpPortRequest) returns (MasterResponse);
+  rpc GetTFConfig(MasterRequest) returns (MasterResponse);
+  rpc SetTFConfig(MasterRequest) returns (MasterResponse);
+  rpc EstimatePSResource(PsResourceRequest) returns (MasterResponse);
   rpc IsReadyScaling(IsReadyScalingRequest) returns (IsReadyScalingResponse);
   rpc ReadyToUpdate(ReadyToUpdateRequest) returns (ReadyToUpdateResponse);
   rpc UpdateServerDef(UpdateServerDefRequest) returns (UpdateServerDefResponse);
