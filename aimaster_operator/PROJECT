@@ -1,0 +1,16 @@
+domain: pai.ai
+layout:
+- go.kubebuilder.io/v3
+projectName: aimaster-operator
+repo: github.com/DeepRec-AI/extension/aimaster_operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: pai.ai
+  group: training
+  kind: TFJob
+  path: github.com/DeepRec-AI/extension/aimaster_operator/api/v1alpha1
+  version: v1alpha1
+version: "3"
