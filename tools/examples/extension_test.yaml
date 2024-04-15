@@ -1,0 +1,159 @@
+apiVersion: training.pai.ai/v1alpha1
+kind: TFJob
+metadata:
+  name: extension-demo
+  namespace: aimaster-operator-system
+spec:
+  tfReplicaSpecs:
+    PS:
+      replicas: 3
+      restartPolicy: OnFailure
+      template:
+        spec:
+          terminationGracePeriodSeconds: 30
+          containers:
+            - name: tensorflow
+              image: alideeprec/extension-release:latest
+              imagePullPolicy: Always
+              volumeMounts:
+                - name: nfs-volume
+                  mountPath: /mnt/data
+              resources:
+                limits:
+                  cpu: '10'
+                  memory: 32Gi
+                requests:
+                  cpu: '8'
+                  memory: 6Gi
+              env:
+                - name: ARENA_ARRAY_SIZE
+                  value: "128"
+                - name: TF_DUMP_GRAPH_PREFIX
+                  value: /workspace
+              command:
+                - python
+                - /mnt/data/workspace/train.py
+                - "--ev=True"
+                - "--steps=20000"
+                - "--save_steps=1500"
+                - "--optimizer=adam"
+                - "--data_location=/mnt/data/data/"
+                - "--checkpoint=/mnt/data/model/"
+                - "--no_eval"
+                - "--batch_size=1024"
+                - "--parquet_dataset=False"
+          volumes:
+            - name: nfs-volume
+              persistentVolumeClaim:
+                claimName: extension-pvc
+    Chief:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          terminationGracePeriodSeconds: 30
+          containers:
+            - name: tensorflow
+              image: alideeprec/extension-release:latest
+              imagePullPolicy: Always
+              volumeMounts:
+                - name: nfs-volume
+                  mountPath: /mnt/data
+              resources:
+                limits:
+                  cpu: '10'
+                  memory: 32Gi
+                requests:
+                  cpu: '6'
+                  memory: 20Gi
+              env:
+                - name: ARENA_ARRAY_SIZE
+                  value: "128"
+                - name: TF_DUMP_GRAPH_PREFIX
+                  value: /workspace
+              command:
+                - python
+                - /mnt/data/workspace/train.py
+                - "--ev=True"
+                - "--steps=20000"
+                - "--save_steps=1500"
+                - "--optimizer=adam"
+                - "--data_location=/mnt/data/data/"
+                - "--checkpoint=/mnt/data/model/"
+                - "--no_eval"
+                - "--batch_size=1024"
+                - "--parquet_dataset=False"
+          volumes:
+            - name: nfs-volume
+              persistentVolumeClaim:
+                claimName: extension-pvc
+    Worker:
+      replicas: 2
+      restartPolicy: Never
+      template:
+        spec:
+          terminationGracePeriodSeconds: 30
+          containers:
+            - name: tensorflow
+              image: alideeprec/extension-release:latest
+              imagePullPolicy: Always
+              volumeMounts:
+                - name: nfs-volume
+                  mountPath: /mnt/data
+              resources:
+                limits:
+                  cpu: '10'
+                  memory: 32Gi
+                requests:
+                  cpu: '6'
+                  memory: 20Gi
+              env:
+                - name: ARENA_ARRAY_SIZE
+                  value: "128"
+                - name: TF_DUMP_GRAPH_PREFIX
+                  value: /workspace
+              command:
+                - python
+                - /mnt/data/workspace/train.py
+                - "--ev=True"
+                - "--steps=20000"
+                - "--save_steps=1500"
+                - "--optimizer=adam"
+                - "--data_location=/mnt/data/data/"
+                - "--checkpoint=/mnt/data/model/"
+                - "--no_eval"
+                - "--batch_size=1024"
+                - "--parquet_dataset=False"
+          volumes:
+            - name: nfs-volume
+              persistentVolumeClaim:
+                claimName: extension-pvc
+    AIMaster:
+      replicas: 1
+      template:
+        metadata:
+          name: extension-demo
+        spec:
+          containers:
+            - name: tensorflow
+              image: alideeprec/extension-aimaster-release:latest
+              imagePullPolicy: Always
+              args: [ "--enable-dynamic-embedding-server true"]
+              env:
+                - name: JOB_NAME
+                  value: extension-demo
+                - name: JOB_TYPE
+                  value: TF
+                - name: NAMESPACE
+                  value: aimaster-operator-system
+              resources:
+                limits:
+                  cpu: '4'
+                  memory: 8Gi
+                requests:
+                  cpu: '4'
+                  memory: 8Gi
+              imagePullPolicy: Always
+          restartPolicy: Never
+          serviceAccountName: aimaster-operator-controller-manager #take care
+      restartPolicy: Never
