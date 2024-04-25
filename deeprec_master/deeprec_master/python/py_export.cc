@@ -17,6 +17,7 @@ limitations under the License.
 #include <sstream>
 #include <typeinfo>
 
+#include "deeprec_master/include/data_distributor/grpc_data_manager.h"
 #include "deeprec_master/include/metrics_mgr.h"
 #include "deeprec_master/include/ps_resource.h"
 #include "deeprec_master/include/ps_resource_analyzer.h"
@@ -97,5 +98,57 @@ PYBIND11_MODULE(pywrap_deeprecmaster, m) {
   m.def("new_scheduler", &NewSchedulerService,
         py::return_value_policy::take_ownership, py::arg("ip"),
         py::arg("port"));
+
+  py::class_<DataManagerQueryResult>(m, "DataManagerQueryResult")
+    .def_readwrite("status", &DataManagerQueryResult::status)
+    .def_readwrite("is_ready", &DataManagerQueryResult::is_ready)
+    .def_readwrite("slice_tag", &DataManagerQueryResult::slice_tag)
+    .def_readwrite("slice_prefix", &DataManagerQueryResult::slice_prefix)
+    .def_readwrite("slice_size", &DataManagerQueryResult::slice_size)
+    .def_readwrite("slice_data", &DataManagerQueryResult::slice_data)
+    .def_readwrite("data_state", &DataManagerQueryResult::data_state);
+
+  m.def("init_data_manager",
+        &InitDataManager,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"),
+        py::arg("config"));
+
+  m.def("is_ready_data_manager",
+        &IsReadyDataManager,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"));
+
+  m.def("get_slice_from_data_manager",
+        &GetSliceFromDataManager,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"));
+
+  m.def("get_data_state_from_data_manager",
+        &GetDataStateFromDataManager,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"));
+
+  m.def("start_data_dispatch",
+        &DataManagerStartDataDispatch,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"));
+
+  m.def("stop_data_dispatch_and_get_data_state",
+        &DataManagerStopDataDispatchAndGetDataState,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"));
 
 }  // NOLINT [readability/fn_size]

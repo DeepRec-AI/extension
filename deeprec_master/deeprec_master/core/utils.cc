@@ -12,11 +12,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 =============================================================================*/
-#include "deeprec_master/include/utils.h"
-
 #include <unistd.h>
 #include <chrono>
 #include <cmath>
+
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/numbers.h"
+
+#include "deeprec_master/include/errors.h"
+#include "deeprec_master/include/utils.h"
 
 namespace deeprecmaster {
 
@@ -56,5 +61,55 @@ int64_t GetBackOffTimeInUs(int retry_count) {
   int64_t pow = std::exp2(retry_count);
   return std::min(max_backoff, initial_backoff * pow);
 }
+
+namespace env_var {
+
+Status ReadBoolFromEnvVar(absl::string_view env_var_name, bool default_val,
+                          bool* value) {
+  *value = default_val;
+  const char* env_var_val = getenv(std::string(env_var_name).c_str());
+  if (env_var_val == nullptr) {
+    return Status::OK();
+  }
+  std::string str_value = absl::AsciiStrToLower(env_var_val);
+  if (str_value == "0" || str_value == "false") {
+    *value = false;
+    return Status::OK();
+  } else if (str_value == "1" || str_value == "true") {
+    *value = true;
+    return Status::OK();
+  }
+  return error::InvalidArgument(absl::StrCat(
+      "Failed to parse the env-var ${", env_var_name, "} into bool: ",
+      env_var_val, ". Use the default value: ", default_val));
+}
+
+Status ReadInt64FromEnvVar(absl::string_view env_var_name, int64_t default_val,
+                           int64_t* value) {
+  *value = default_val;
+  const char* env_var_val = getenv(std::string(env_var_name).c_str());
+  if (env_var_val == nullptr) {
+    return Status::OK();
+  }
+  if (absl::SimpleAtoi(env_var_val, value)) {
+    return Status::OK();
+  }
+  return error::InvalidArgument(absl::StrCat(
+      "Failed to parse the env-var ${", env_var_name, "} into int64: ",
+      env_var_val, ". Use the default value: ", default_val));
+}
+
+Status ReadStringFromEnvVar(absl::string_view env_var_name, absl::string_view default_val,
+                            std::string* value) {
+  const char* env_var_val = getenv(std::string(env_var_name).c_str());
+  if (env_var_val != nullptr) {
+    *value = env_var_val;
+  } else {
+    *value = std::string(default_val);
+  }
+  return Status::OK();
+}
+
+} // End of namespace env_var
 
 }  // namespace deeprecmaster

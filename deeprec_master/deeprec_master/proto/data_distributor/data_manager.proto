@@ -1,0 +1,94 @@
+syntax="proto3";
+
+package deeprecmaster;
+
+import "deeprec_master/proto/error_code.proto";
+
+message DataManagerInitRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+  string config = 3;
+}
+
+message DataManagerCommonResponse {
+  Code code = 1;
+  string msg = 2;
+}
+
+message DataManagerIsReadyRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+}
+
+message DataManagerIsReadyResponse {
+  Code code = 1;
+  bool is_ready = 2;
+  string msg = 3;
+}
+
+message DataManagerGetSliceRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+}
+
+message DataManagerGetSliceResponse {
+  Code code = 1;
+  string slice_tag = 2;
+  string slice_prefix = 3;
+  int64 slice_size = 4;
+  repeated string slice_data = 5;
+  string msg = 6;
+}
+
+message DataManagerGetDataStateRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+}
+
+message DataManagerGetDataStateResponse {
+  Code code = 1;
+  string data_state = 2;
+  string msg = 3;
+}
+
+message DataManagerStartDataDispatchRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+}
+
+message DataManagerStartDataDispatchRespone {
+  Code code = 1;
+  string msg = 2;
+}
+
+message DataManagerStopDataDispatchAndGetDataStateRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+}
+
+message DataManagerStopDataDispatchAndGetDataStateResponse {
+  Code code = 1;
+  string data_state = 2;
+  string msg = 3;
+}
+
+service DataManagerService {
+  rpc InitDataManager(DataManagerInitRequest)
+    returns (DataManagerCommonResponse) {}
+
+  rpc IsReadyDataManager(DataManagerIsReadyRequest)
+    returns (DataManagerIsReadyResponse) {}
+
+  rpc GetSliceFromDataManager(DataManagerGetSliceRequest)
+    returns (DataManagerGetSliceResponse) {}
+
+  rpc GetDataStateFromDataManager(DataManagerGetDataStateRequest)
+    returns (DataManagerGetDataStateResponse) {}
+
+  rpc DataManagerStartDataDispatch(DataManagerStartDataDispatchRequest)
+    returns (DataManagerStartDataDispatchRespone) {}
+
+  rpc DataManagerStopDataDispatchAndGetDataState(
+        DataManagerStopDataDispatchAndGetDataStateRequest)
+    returns (DataManagerStopDataDispatchAndGetDataStateResponse) {}
+}

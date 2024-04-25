@@ -116,6 +116,15 @@ pybind:
 	@if [ ! -d "${PYBIND_DIR}/build" ]; then cd "${PYBIND_DIR}"; bash ./build.sh; fi
 	@echo "pybind11 done"
 
+# abseil
+ABSEIL_DIR := $(THIRD_PARTY_DIR)/abseil
+ABSEIL_INCLUDE := $(THIRD_PARTY_DIR)/abseil/build/include
+ABSEIL_LIB := $(THIRD_PARTY_DIR)/abseil/build/lib
+abseil:
+	@echo "prepare abseil library ..."
+	@if [ ! -d "${ABSEIL_DIR}/build" ]; then cd "${ABSEIL_DIR}"; bash ./build.sh; fi
+	@echo "abseil done"
+
 # gazer
 GAZER := gazer
 GAZER_LIB := $(GAZER)/$(GAZER)/lib$(GAZER).so
@@ -183,6 +192,8 @@ clean:
 	@rm -fr third_party/rapidjson/build
 	@rm -fr third_party/grpc/build
 	@rm -fr third_party/protobuf/build
+	@rm -fr third_party/abseil/build
+	@rm -fr third_party/pybind11/build
 	@rm -fr $(addsuffix /docker_build/, $(MASTER))
 	@echo "remove .o/.d/.so/.pb*"
 	@find $(ALL_MOUDLES) -name *.o -exec rm -fr {} \;

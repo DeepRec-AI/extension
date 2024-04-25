@@ -3,6 +3,7 @@ FROM alideeprec/deeprec-base:deeprec-base-cpu-py36-ubuntu18.04
 
 RUN apt-get update
 RUN apt-get install -y autoconf
+RUN apt-get install -y cmake
 RUN apt-get install -y libssl-dev libc-ares-dev
 
 # build & install deeprec wheel manually

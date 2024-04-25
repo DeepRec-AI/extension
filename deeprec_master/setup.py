@@ -21,7 +21,7 @@ libraries = []
 include_dirs.append(ROOT_PATH)
 include_dirs.append(ROOT_PATH + '/deeprec_master/include')
 include_dirs.append(ROOT_PATH + '/third_party/pybind11/pybind11/include')
-include_dirs.append(ROOT_PATH + '/third_party/grpc/build')
+include_dirs.append(ROOT_PATH + '/third_party/grpc/build/include')
 include_dirs.append(ROOT_PATH + '/third_party/protobuf/build/include')
 include_dirs.append(numpy.get_include())
 

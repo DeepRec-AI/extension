@@ -13,3 +13,4 @@ dist/
 bin/
 *.whl
 docker_build/
+*~

@@ -16,6 +16,7 @@
 
 import time
 
+from deeprec_master.python.utils.logger import logger
 
 class RetryCaller:
     """Retry caller"""
@@ -40,4 +41,5 @@ class RetryCaller:
 
     def _retry_wait(self, retry_count):
         delay = min(self._base_delay * 2**retry_count, self._max_delay)
+        logger.info("RetryCaller wait for %s (s)", str(delay))
         time.sleep(delay)

@@ -14,26 +14,25 @@ limitations under the License.
 =============================================================================*/
 #pragma once
 
-#include <map>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
-#include "deeprec_master/include/ps_resource_analyzer.h"
 #include "deeprec_master/include/status.h"
-#include "deeprec_master/proto/data_distributor/data_manager.pb.h"
-#include "deeprec_master/proto/elastic_training.pb.h"
+#include "deeprec_master/proto/data_distributor/data_config.pb.h"
+
+#include <string>
 
 namespace deeprecmaster {
 
-class SchedulerService {
+class DataState {
  public:
-  virtual ~SchedulerService() {}
-  virtual std::string Start() = 0;
-  virtual void Join() = 0;
+  DataState();
+  ~DataState();
+  Status Init(const DataConfig& config);
+  void UpdateEpochIndex(int64_t);
+  void UpdateShuffleSeed(int64_t value);
+  void UpdateSliceIndex(int64_t value);
+  bool SerializeToBase64String(std::string* output);
+
+ private:
+  DataConfig data_config_;
 };
 
-SchedulerService* NewSchedulerService(const std::string& ip, int port);
-
-}  // namespace deeprecmaster
+} // End of namespace deeprecmaster

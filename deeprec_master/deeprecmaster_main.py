@@ -15,6 +15,8 @@ def main():
     logger.info(args)
     
     if job_name is not None and namespace is not None:
+        logger.info("Create TfJobMaster for namespace: %s, job_name: %s",
+                    namespace, job_name)
         job_controller = TfJobMaster(job_name, namespace, args)
     else:
         logger.error("JOB_NAME or NAMESPACE or JOB_TYPE not set, exit...")

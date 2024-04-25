@@ -14,26 +14,32 @@ limitations under the License.
 =============================================================================*/
 #pragma once
 
-#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
-#include "deeprec_master/include/ps_resource_analyzer.h"
+#include "grpcpp/grpcpp.h"
 #include "deeprec_master/include/status.h"
-#include "deeprec_master/proto/data_distributor/data_manager.pb.h"
-#include "deeprec_master/proto/elastic_training.pb.h"
 
 namespace deeprecmaster {
 
-class SchedulerService {
+typedef std::shared_ptr<::grpc::Channel> SharedGrpcChannelPtr;
+
+class GrpcChannelCache {
  public:
-  virtual ~SchedulerService() {}
-  virtual std::string Start() = 0;
-  virtual void Join() = 0;
+  GrpcChannelCache() {}
+  ~GrpcChannelCache() {}
+  SharedGrpcChannelPtr FindChannel(const std::string& target) const;
+  Status UpdateChannel(
+      const std::string& target,
+      SharedGrpcChannelPtr channel,
+      bool force=true);
+  int64_t Size() const;
+
+ private:
+  mutable std::mutex mu_;
+  std::unordered_map<std::string, SharedGrpcChannelPtr> channels_;
 };
 
-SchedulerService* NewSchedulerService(const std::string& ip, int port);
-
-}  // namespace deeprecmaster
+} // End of namespace deeprecmaster
