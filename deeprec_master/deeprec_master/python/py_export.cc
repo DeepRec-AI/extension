@@ -18,6 +18,7 @@ limitations under the License.
 #include <typeinfo>
 
 #include "deeprec_master/include/data_distributor/grpc_data_manager.h"
+#include "deeprec_master/include/model_ready/grpc_model_ready_mgr.h"
 #include "deeprec_master/include/metrics_mgr.h"
 #include "deeprec_master/include/ps_resource.h"
 #include "deeprec_master/include/ps_resource_analyzer.h"
@@ -146,6 +147,25 @@ PYBIND11_MODULE(pywrap_deeprecmaster, m) {
 
   m.def("stop_data_dispatch_and_get_data_state",
         &DataManagerStopDataDispatchAndGetDataState,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"));
+
+  py::class_<ModelReadyMgrQueryResult>(m, "ModelReadyMgrQueryResult")
+    .def_readwrite("status", &ModelReadyMgrQueryResult::status)
+    .def_readwrite("ready_state", &ModelReadyMgrQueryResult::ready_state);
+
+  m.def("model_ready_mgr_set_state",
+        &SetStateModelReadyMgr,
+        py::return_value_policy::take_ownership,
+        py::arg("master_addr"),
+        py::arg("task_name"),
+        py::arg("task_index"),
+        py::arg("ready_state"));
+
+  m.def("model_ready_mgr_get_state",
+        &GetStateModelReadyMgr,
         py::return_value_policy::take_ownership,
         py::arg("master_addr"),
         py::arg("task_name"),

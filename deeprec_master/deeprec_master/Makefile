@@ -4,9 +4,11 @@ MASTER_PROTO_DIR := $(MASTER)/$(MASTER)/proto
 MASTER_PROTO_OBJ := $(MASTER_PROTO_DIR)/error_code.pb.o \
 		    $(MASTER_PROTO_DIR)/data_distributor/data_config.pb.o \
 		    $(MASTER_PROTO_DIR)/data_distributor/data_manager.pb.o \
+		    $(MASTER_PROTO_DIR)/model_ready/model_ready.pb.o \
 		    $(MASTER_PROTO_DIR)/elastic_training.pb.o \
 		    $(MASTER_PROTO_DIR)/data_distributor/data_manager.grpc.pb.o \
-		    $(MASTER_PROTO_DIR)/elastic_training.grpc.pb.o
+		    $(MASTER_PROTO_DIR)/elastic_training.grpc.pb.o \
+		    $(MASTER_PROTO_DIR)/model_ready/model_ready.grpc.pb.o
 
 proto: grpc
 	mkdir -p $(dir $@)
@@ -15,15 +17,16 @@ proto: grpc
 	$(PROTOC) --cpp_out=./$(MASTER)/ -I$(MASTER) $(MASTER_PROTO_DIR)/data_distributor/data_config.proto
 	$(PROTOC) --cpp_out=./$(MASTER)/ -I$(MASTER) $(MASTER_PROTO_DIR)/data_distributor/data_manager.proto
 	$(PROTOC) --cpp_out=./$(MASTER)/ -I$(MASTER) $(MASTER_PROTO_DIR)/elastic_training.proto
+	$(PROTOC) --cpp_out=./$(MASTER)/ -I$(MASTER) $(MASTER_PROTO_DIR)/model_ready/model_ready.proto
 
 	$(PROTOC) --grpc_out=./$(MASTER)/ -I$(MASTER) --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(MASTER_PROTO_DIR)/data_distributor/data_manager.proto
 	$(PROTOC) --grpc_out=./$(MASTER)/ -I$(MASTER) --plugin=protoc-gen-grpc=$(PROTOC_GRPC_PYTHON_PLUGIN) $(MASTER_PROTO_DIR)/elastic_training.proto
 	$(PROTOC) --grpc_out=./$(MASTER)/ -I$(MASTER) --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(MASTER_PROTO_DIR)/elastic_training.proto
+	$(PROTOC) --grpc_out=./$(MASTER)/ -I$(MASTER) --plugin=protoc-gen-grpc=$(PROTOC_GRPC_CPP_PLUGIN) $(MASTER_PROTO_DIR)/model_ready/model_ready.proto
 
 	$(PROTOC) --proto_path=./$(MASTER)/ -I$(MASTER) --python_out=./$(MASTER) $(MASTER_PROTO_DIR)/error_code.proto
 	$(PROTOC) --proto_path=./$(MASTER)/ -I$(MASTER) --python_out=./$(MASTER) $(MASTER_PROTO_DIR)/data_distributor/data_config.proto
 	$(PROTOC) --proto_path=./$(MASTER)/ -I$(MASTER) --python_out=./$(MASTER) $(MASTER_PROTO_DIR)/elastic_training.proto
-
 
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/error_code.pb.cc -o $(MASTER_PROTO_DIR)/error_code.pb.o
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/data_distributor/data_config.pb.cc -o $(MASTER_PROTO_DIR)/data_distributor/data_config.pb.o
@@ -31,6 +34,8 @@ proto: grpc
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/data_distributor/data_manager.grpc.pb.cc -o $(MASTER_PROTO_DIR)/data_distributor/data_manager.grpc.pb.o
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/elastic_training.pb.cc -o $(MASTER_PROTO_DIR)/elastic_training.pb.o
 	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/elastic_training.grpc.pb.cc -o $(MASTER_PROTO_DIR)/elastic_training.grpc.pb.o
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/model_ready/model_ready.pb.cc -o $(MASTER_PROTO_DIR)/model_ready/model_ready.pb.o
+	$(CXX) $(TENSORFLOW_CFLAGS) -std=c++11 -fPIC -I$(MASTER) -I$(PROTOBUF_INCLUDE) -I$(GRPC_INCLUDE) -c $(MASTER_PROTO_DIR)/model_ready/model_ready.grpc.pb.cc -o $(MASTER_PROTO_DIR)/model_ready/model_ready.grpc.pb.o
 
 MASTER_CC_SOURCES := $(shell \
         find $(MASTER_SRC_DIR) -type f \

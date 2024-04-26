@@ -1,0 +1,35 @@
+syntax="proto3";
+
+package deeprecmaster;
+
+import "deeprec_master/proto/error_code.proto";
+
+message ModelReadyMgrSetStateRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+  bool ready_state = 3;
+}
+
+message ModelReadyMgrSetStateResponse {
+  Code code = 1;
+  string msg = 2;
+}
+
+message ModelReadyMgrGetStateRequest {
+  string task_name = 1;
+  int32 task_index = 2;
+}
+
+message ModelReadyMgrGetStateResponse {
+  Code code = 1;
+  bool ready_state = 2;
+  string msg = 3;
+}
+
+service ModelReadyMgrService {
+  rpc SetState(ModelReadyMgrSetStateRequest)
+    returns (ModelReadyMgrSetStateResponse) {}
+
+  rpc GetState(ModelReadyMgrGetStateRequest)
+    returns (ModelReadyMgrGetStateResponse) {}
+}

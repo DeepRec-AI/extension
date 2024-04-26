@@ -19,12 +19,14 @@ limitations under the License.
 #include <grpc/grpc.h>
 #include <grpcpp/grpcpp.h>
 #include "deeprec_master/include/data_distributor/data_manager.h"
+#include "deeprec_master/include/model_ready/model_ready_mgr.h"
 #include "deeprec_master/include/errors.h"
 #include "deeprec_master/include/logging.h"
 #include "deeprec_master/include/metrics_mgr.h"
 #include "deeprec_master/proto/data_distributor/data_manager.grpc.pb.h"
 #include "deeprec_master/proto/elastic_training.grpc.pb.h"
 #include "deeprec_master/proto/elastic_training.pb.h"
+#include "deeprec_master/proto/model_ready/model_ready.grpc.pb.h"
 
 namespace deeprecmaster {
 
@@ -270,6 +272,56 @@ private:
   DataManager* data_manager_;
 };
 
+class ModelReadyManagerServiceImpl : public ModelReadyMgrService::Service {
+ public:
+  ModelReadyManagerServiceImpl(ModelReadyManager* manager)
+    : model_ready_mgr_(manager) {}
+
+  ~ModelReadyManagerServiceImpl() {}
+
+  grpc::Status SetState(grpc::ServerContext* context,
+                        const ModelReadyMgrSetStateRequest* request,
+                        ModelReadyMgrSetStateResponse* reply) override {
+    (void)context;
+    std::string task_name = request->task_name();
+    int32_t task_index = request->task_index();
+    bool ready_state = request->ready_state();
+
+    Status st = model_ready_mgr_->SetState(task_name, task_index, ready_state);
+    reply->set_code(deeprecmaster::Code(st.code()));
+    if (st.ok()) {
+      reply->set_msg("ok");
+    } else {
+      reply->set_msg(st.msg());
+    }
+
+    return grpc::Status::OK;
+  }
+
+  grpc::Status GetState(grpc::ServerContext* context,
+                        const ModelReadyMgrGetStateRequest* request,
+                        ModelReadyMgrGetStateResponse* reply) override {
+    (void)context;
+    std::string task_name = request->task_name();
+    int32_t task_index = request->task_index();
+
+    bool ready_state = false;
+    Status st = model_ready_mgr_->GetState(task_name, task_index, &ready_state);
+    reply->set_code(deeprecmaster::Code(st.code()));
+    reply->set_ready_state(ready_state);
+    if (st.ok()) {
+      reply->set_msg("ok");
+    } else {
+      reply->set_msg(st.msg());
+    }
+
+    return grpc::Status::OK;
+  }
+
+ private:
+  ModelReadyManager* model_ready_mgr_;
+};
+
 class GrpcSchedulerService : public SchedulerService {
  public:
   explicit GrpcSchedulerService(const std::string& ip, int port)
@@ -282,6 +334,7 @@ class GrpcSchedulerService : public SchedulerService {
   int port_;
   std::unique_ptr<ElasticTrainingServiceImpl> et_service_;
   std::unique_ptr<DataManagerServiceImpl> dm_service_;
+  std::unique_ptr<ModelReadyManagerServiceImpl> mrm_service_;
   std::unique_ptr<grpc::Server> grpc_server_;
 };
 
@@ -289,11 +342,14 @@ std::string GrpcSchedulerService::Start() {
   et_service_.reset(new ElasticTrainingServiceImpl(
       PsResourceAnalyzer::GetInstance(), &MetricsMgr::GetInstance()));
   dm_service_.reset(new DataManagerServiceImpl(DataManager::GetInstance()));
+  mrm_service_.reset(
+    new ModelReadyManagerServiceImpl(ModelReadyManager::GetInstance()));
   grpc::ServerBuilder builder;
   builder.AddListeningPort("0.0.0.0:" + std::to_string(port_),
                            grpc::InsecureServerCredentials(), &port_);
   builder.RegisterService(et_service_.get());
   builder.RegisterService(dm_service_.get());
+  builder.RegisterService(mrm_service_.get());
   grpc_server_ = builder.BuildAndStart();
   std::string my_addr = ip_ + ":" + std::to_string(port_);
   return my_addr;
