@@ -21,8 +21,8 @@ import json
 import os
 import grpc
 
-from deeprec_master.proto import elastic_training_pb2, elastic_training_pb2_grpc
-
+from deeprec_master.proto import elastic_training_pb2, \
+    elastic_training_pb2_grpc, error_code_pb2
 from tensorflow.python.estimator import run_config as run_config_lib
 from tensorflow.python.framework import errors_impl
 from dynamic_embedding_server.python.utils.logger import logger
@@ -63,7 +63,7 @@ def report_estimated_ps_resource(stub, has_ev, total_size):
   req.ps_memory = total_size
   req.has_ev = has_ev
   resp = stub.EstimatePSResource(req)
-  if resp.code != elastic_training_pb2.OK:
+  if resp.code != error_code_pb2.OK:
     logger.error("report_estimated_ps_resource error.")
 
 @retry(retries=5)
@@ -71,14 +71,14 @@ def set_tfconfig(stub, tf_config):
   req = elastic_training_pb2.MasterRequest()
   req.msg = tf_config
   resp = stub.SetTFConfig(req)
-  if resp.code != elastic_training_pb2.OK:
+  if resp.code != error_code_pb2.OK:
     logger.error("set_tfconfig error.")
 
 @retry(retries=5)
 def get_tfconfig(stub):
   req = elastic_training_pb2.MasterRequest()
   resp = stub.GetTFConfig(req)
-  if resp.code == elastic_training_pb2.OK:
+  if resp.code == error_code_pb2.OK:
     return resp.msg
   else:
     logger.error("get_tfconfig error.")

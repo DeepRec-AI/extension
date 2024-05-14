@@ -27,7 +27,7 @@ import types
 from collections import defaultdict
 
 from deeprec_master.proto import elastic_training_pb2, \
-    elastic_training_pb2_grpc
+    elastic_training_pb2_grpc, error_code_pb2
 from dynamic_embedding_server.python import redistribution_ops
 
 from tensorflow.python.framework import dtypes
@@ -144,7 +144,7 @@ class ElasticTrainingHook(session_run_hook.SessionRunHook):
       resp = _stub.IsReadyScaling(req)
       # reset sync variable
       run_context.session.run(self.sync_reset)
-      if resp.code == elastic_training_pb2.OK:
+      if resp.code == error_code_pb2.OK:
         if resp.scaling_action == elastic_training_pb2.SCALING_UP:
           logger.info("[DES]: start scaling up process.")
           partition_num = resp.ps_num
