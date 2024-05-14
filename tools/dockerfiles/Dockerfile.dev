@@ -1,4 +1,4 @@
-# Generate dev docker image: alideeprec/deeprec-dev:deeprec-extension-cpu-py36-ubuntu18.04
+# Generate dev docker image: alideeprec/extension-dev:cpu-py36-ubuntu18.04
 FROM alideeprec/deeprec-base:deeprec-base-cpu-py36-ubuntu18.04
 
 RUN apt-get update
@@ -11,3 +11,4 @@ COPY ./tensorflow-1.15.5+deeprec2402-cp36-cp36m-linux_x86_64.whl /root/tensorflo
 COPY ./tensorflow_estimator-1.15.2+deeprec2310-py2.py3-none-any.whl /root/tensorflow_estimator-1.15.2+deeprec2310-py2.py3-none-any.whl
 RUN pip install /root/tensorflow-1.15.5+deeprec2402-cp36-cp36m-linux_x86_64.whl
 RUN pip install /root/tensorflow_estimator-1.15.2+deeprec2310-py2.py3-none-any.whl
+RUN rm -f /root/*.whl

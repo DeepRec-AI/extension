@@ -1,4 +1,4 @@
-FROM alideeprec/deeprec-dev:deeprec-extension-cpu-py36-ubuntu18.04
+FROM alideeprec/extension-dev:cpu-py36-ubuntu18.04
 
 RUN mkdir /workspace/
 COPY ./*.whl /tmp/
